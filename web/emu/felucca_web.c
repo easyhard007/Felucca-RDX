@@ -205,6 +205,29 @@ static void fl_plain_window_init(void) {}
 #include "../../firmware/src/storage.c"
 #include "../../firmware/src/upreset.c"
 #include "../../firmware/src/project.c"
+#if FELUCCA_RDX
+/* The browser firmware normally omits update transport. Keep a tiny in-memory
+ * frame endpoint so RDX SysEx uses and tests the same parser as hardware. */
+static uint8_t web_rdx_sx[640];
+static uint32_t web_rdx_sx_n;
+static uint8_t web_rdx_sx_ready;
+static uint8_t web_rdx_tx[640];
+static uint32_t web_rdx_tx_n;
+static int ota_wire_send(const uint8_t *p, uint32_t n)
+{
+    uint32_t i;
+    for (i = 0; i < n && web_rdx_tx_n < sizeof web_rdx_tx; i++)
+        web_rdx_tx[web_rdx_tx_n++] = p[i];
+    return 0;
+}
+static int ota_frame_get(const uint8_t **p, uint32_t *n)
+{
+    if (!web_rdx_sx_ready) return 0;
+    *p = web_rdx_sx; *n = web_rdx_sx_n; return 1;
+}
+static void ota_frame_done(void) { web_rdx_sx_ready = 0; }
+#include "../../firmware/src/rdx_sysex.c"
+#endif
 
 /* ------------------------------------------------- main.c and its HAL --- */
 #if FELUCCA_CPU2
@@ -266,6 +289,9 @@ static uint32_t web_booted, web_boot_ms, web_last_frame;
 static void web_power_on(void)
 {
     persist_boot();
+#if FELUCCA_FM6_ONLY
+    fm6_only_settings_boot();
+#endif
     settings_init();
     usb_serial_apply();
     lcd_init();
@@ -280,7 +306,13 @@ static void web_power_on(void)
     kb_boot_hold = 1;                     /* main.c (#137): the keys silent under the splash */
     audio_init();
     boot_leds();                          /* main.c: the power-on LED sweep, from the scan's start */
+#if FELUCCA_FM6_ONLY
+    if (fm6_only_migrate)
+        settings_save();
+    autosave_boot(boot_clean && !fm6_only_migrate);
+#else
     autosave_boot(boot_clean);            /* main.c: the last session's music (1.2, project.c) */
+#endif
     web_boot_ms = fm1_ms + 430u;         /* main.c: 30 + 400 ms before the first frame */
     web_booted = 1;
 }
@@ -491,6 +523,153 @@ EXPORT void web_test_heavy(void)
 }
 
 EXPORT uint32_t web_test_user_preset(uint32_t i) { return (uint32_t)up_used(i); }
+#if FELUCCA_FM6_ONLY
+/* FM6-only upgrade regression hooks (fm6_only_test.mjs): create the two pieces of
+ * state an existing physical unit has that an empty browser instance does not. */
+EXPORT void web_test_make_legacy_state(void)
+{
+    uint32_t k;
+    favorites.filter = 1;
+    favorites.factory[15][11] = 0;
+    favorites.factory[ENGI_FM6][0] = 7u;       /* TINE EP, BELL, FM BASS only */
+    favorites.factory[15][13] = 0;             /* before FM6_ONLY_SETTINGS_TAG */
+    settings_save();
+    trk[0].eng_req = 0;                        /* an autosaved ANALOG track */
+    trk[0].preset = 7;
+    project_capture(&proj_scratch);
+    proj_wire_gen++;
+    if (proj_pack(&proj_wire, &proj_scratch))
+        (void)st_save(OBJ_AUTOSAVE, &proj_wire, sizeof proj_wire);
+    for (k = 0; k < NTRK; k++)
+        panic_req |= (uint8_t)(1u << k);
+}
+EXPORT uint32_t web_test_preset_total(void) { uint32_t n; (void)preset_pos(&n); return n; }
+EXPORT uint32_t web_test_track_engine(uint32_t k) { return k < NTRK ? trk[k].eng_req : 0xFFu; }
+EXPORT uint32_t web_test_track_preset(uint32_t k) { return k < NTRK ? trk[k].preset : 0xFFu; }
+#if FELUCCA_RDX
+EXPORT void web_test_rdx_preset(uint32_t p)
+{
+    set_engine_of(&trk[0], ENGI_RDX);
+    apply_preset_to(&trk[0], p % RDX_NPRESETS);
+    song.sel = 0;
+}
+EXPORT void web_test_rdx_dry(void)
+{
+    track_t *t = &trk[0];
+    t->p[P_DIST] = t->p[P_CHOR] = t->p[P_DLY] = t->p[P_REV] = 0;
+    t->p[P_ITYPE] = t->p[P_IMIX] = 0;
+}
+EXPORT void web_test_audio_flush(void) { ring_r = ring_w; }
+EXPORT uint32_t web_test_active_voices(void)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < NVOICE; i++)
+        n += trk[0].v[i].active != 0;
+    return n;
+}
+EXPORT uint32_t web_test_fading_voices(void)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < NVOICE; i++)
+        n += trk[0].v[i].active && trk[0].v[i].stage == 4u;
+    return n;
+}
+EXPORT uint32_t web_test_shed(uint32_t hard)
+{
+    shed_voice(hard != 0u);
+    return shed_count;
+}
+EXPORT void web_test_shed_reset(void) { shed_count = 0; shed_req = shed_over = 0; }
+EXPORT uint32_t web_test_rdx_force_stop(void)
+{
+    uint32_t i;
+    for (i = 0; i < NVOICE; i++)
+        if (trk[0].v[i].active && trk[0].v[i].stage != 4u) {
+            voice_kill(&trk[0], &trk[0].v[i]);
+            return 1;
+        }
+    return 0;
+}
+EXPORT uint32_t web_test_rdx_force_tail(void)
+{
+    uint32_t i;
+    for (i = 0; i < RDX_POLY; i++) {
+        rdx_note_t *n = rdx_note(&trk[0], &trk[0].v[i]);
+        if (trk[0].v[i].active && trk[0].v[i].stage == 4u && n)
+            return n->tail_left;
+    }
+    return 0;
+}
+EXPORT void web_test_rdx_sysex_byte(uint32_t b)
+{
+    b &= 0xFFu;
+    if (b == 0xF0u) {
+        web_rdx_sx_n = 0;
+        web_rdx_sx_ready = 0;
+        web_rdx_tx_n = 0;
+    } else if (b == 0xF7u) {
+        web_rdx_sx_ready = web_rdx_sx_n != 0;
+        rdx_sysex_service();
+    } else if (web_rdx_sx_n < sizeof web_rdx_sx)
+        web_rdx_sx[web_rdx_sx_n++] = (uint8_t)b;
+}
+EXPORT uint32_t web_test_rdx_tx_size(void) { return web_rdx_tx_n; }
+EXPORT uint32_t web_test_rdx_tx_byte(uint32_t i) { return i < web_rdx_tx_n ? web_rdx_tx[i] : 0xFFFFFFFFu; }
+EXPORT uint32_t web_test_rdx_patch_byte(uint32_t i)
+{
+    rdx_patch_t p;
+    rdx_patch_for_track(0, &p);
+    return i < sizeof p ? ((const uint8_t *)&p)[i] : 0xFFFFFFFFu;
+}
+static rdx_note_t *web_test_rdx_note(void)
+{
+    uint32_t i;
+    for (i = 0; i < RDX_POLY; i++)
+        if (trk[0].v[i].active)
+            return rdx_note(&trk[0], &trk[0].v[i]);
+    return 0;
+}
+EXPORT int32_t web_test_rdx_pitch(void) { rdx_note_t *n = web_test_rdx_note(); return n ? n->pitch : 0; }
+EXPORT int32_t web_test_rdx_pitch_target(void) { rdx_note_t *n = web_test_rdx_note(); return n ? n->pitch_target : 0; }
+EXPORT int32_t web_test_rdx_peg(void) { rdx_note_t *n = web_test_rdx_note(); return n ? n->peg : 0; }
+EXPORT uint32_t web_test_rdx_lfo_phase(void) { rdx_note_t *n = web_test_rdx_note(); return n ? n->lfo_phase : 0; }
+EXPORT uint32_t web_test_rdx_porta_left(void) { rdx_note_t *n = web_test_rdx_note(); return n ? n->porta_left : 0; }
+EXPORT uint32_t web_test_rdx_op_gain(uint32_t op)
+{
+    rdx_note_t *n = web_test_rdx_note();
+    return n && op < 4u ? n->op[op].out_gain : 0;
+}
+EXPORT uint32_t web_test_rdx_voice_mode(void) { return (uint32_t)trk[0].p[P_VOICE]; }
+EXPORT void web_test_rdx_voice_mode_set(uint32_t mode)
+{
+    mode = mode > 2u ? 2u : mode;
+    trk[0].p[P_VOICE] = (int16_t)mode;
+    rdx_voice_settings_set(&trk[0], mode, (uint32_t)clamp(trk[0].p[P_GLIDE], 0, 127));
+}
+EXPORT uint32_t web_test_rdx_restore_stale_voice(uint32_t p)
+{
+    web_test_rdx_preset(p);
+    project_capture(&proj_scratch);
+    proj_scratch.t[0].p[P_VOICE] = V_POLY;       /* an autosave made before RDX patch modes were authoritative */
+    proj_scratch.sum = proj_sum(&proj_scratch);
+    return project_restore_runtime(&proj_scratch) ? 0xFFFFFFFFu : (uint32_t)trk[0].p[P_VOICE];
+}
+EXPORT uint32_t web_test_engine_poly(void) { return ENG_RDX.poly; }
+EXPORT uint32_t web_test_cpu0_pct(void) { return song.cpu_q8 * 100u / 256u; }
+#if FELUCCA_CPU2
+EXPORT uint32_t web_test_cpu1_pct(void) { return song.cpu1_q8 * 100u / 256u; }
+#else
+EXPORT uint32_t web_test_cpu1_pct(void) { return 0xFFFFFFFFu; }
+#endif
+#else
+EXPORT void web_test_fm6_preset(uint32_t p)
+{
+    set_engine_of(&trk[0], ENGI_FM6);
+    apply_preset_to(&trk[0], p % FM6_NFACTORY);
+    song.sel = 0;
+}
+#endif
+#endif
 
 EXPORT uint16_t *web_screen(void) { return web_fb; }
 EXPORT uint32_t web_screen_draws(void) { return web_draws; }

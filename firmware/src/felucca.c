@@ -37,6 +37,12 @@
                                   * mix_block). 0 (FELUCCA_CPU2=0 build.py): none of it (no core 1 stack, waiting loop,
                                   * buffers or menu row). (The same default: core.h) */
 #endif
+#ifndef FELUCCA_FM6_ONLY
+#define FELUCCA_FM6_ONLY 0       /* 1: expose only FM6 and its factory presets; keep engine 12 for stored data */
+#endif
+#ifndef FELUCCA_RDX
+#define FELUCCA_RDX 0            /* 1: slot 12 is the eight-voice fixed-point RDX engine */
+#endif
 #define FM1_CPU1_USED FELUCCA_CPU2   /* hal/fm1_sys.h: the second core is built in; every reset holds it first (its
                                       * waiting loop is in RAM the ROM and the SPL use at boot) */
 #ifndef FELUCCA_VERSION
@@ -110,6 +116,9 @@
 #if FELUCCA_OTA
 #include "ota.c"
 #include "ota_hw.c"
+#if FELUCCA_RDX
+#include "rdx_sysex.c"            /* Yamaha reface DX voice bulk/parameter protocol */
+#endif
 #include "editor.c"              /* web editor SysEx (needs the OTA SysEx plumbing) */
 #endif
 #if FELUCCA_CDC

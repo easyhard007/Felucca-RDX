@@ -36,7 +36,6 @@
 #include "fm6_core.c"
 #include "felucca_fm6.h"         /* tools/gen_fm6_patches.py: FM6_INIT, FM6_FACTORY[] */
 
-#define ENGI_FM6 12u             /* engines.c ENGINES[] (append-only) */
 #define FM6_POLY 6               /* engine_t.poly */
 #define FM6_OWN FM6_NFACTORY     /* SLOT: the track's own patch (F1..F8 before it) */
 #define FM6_NBANK 32u            /* SLOT: B1..B32 after OWN, the voice bank (fm6_vbank.c) */
@@ -219,6 +218,9 @@ static void fm6_adopt(uint32_t tr)
 /* a factory sound load put a SLOT value in (a preset, an engine change): its patch (OWN: the patch stays) */
 static void fm6_track_loaded(const track_t *t)
 {
+#if FELUCCA_RDX
+    (void)t;
+#else
     uint32_t tr = (uint32_t)(t - trk);
     if (tr < NTRK && t->eng_req == ENGI_FM6) {
         fm6_own_ok &= (uint8_t)~(1u << tr);
@@ -227,6 +229,7 @@ static void fm6_track_loaded(const track_t *t)
         else
             fm6_adopt(tr);
     }
+#endif
 }
 
 /* power-on: every track the init voice (what a project stores for the tracks that never played FM6) */
@@ -246,6 +249,9 @@ static void fm6_init(void)
  * MIDI CC) is refused: SLOT goes back to what it was, nothing loads */
 static void fm6_poll(void)
 {
+#if FELUCCA_RDX
+    return;
+#else
     uint32_t tr, bit;
     for (tr = 0; tr < NTRK; tr++) {
         int32_t s = trk[tr].p[P_E7];
@@ -271,6 +277,7 @@ static void fm6_poll(void)
         if (fm6_load_slot(tr, (uint32_t)s))                  /* a bank slot without a voice: SLOT back */
             trk[tr].p[P_E7] = (int16_t)(fm6_slot[tr] <= FM6_OWN + FM6_NBANK ? fm6_slot[tr] : FM6_OWN);
     }
+#endif
 }
 
 /* -------------------------------------------------------------- macros --- */

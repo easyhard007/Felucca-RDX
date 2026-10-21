@@ -591,7 +591,7 @@ static int chk_cap_mode_budget(char *msg, uint32_t n)
             host_preset(&trk[0], 5, 0);
             trk[0].p[P_VOICE] = V_UNISON;
             for (i = 1; i < trk_nvoice(&trk[0]); i++)
-                voice_kill(&trk[0].v[i]);
+                voice_kill(&trk[0], &trk[0].v[i]);
         }
         for (p = 1; p < NPART; p++) {
             trk_note_on(&trk[p], 70u + p * 3u, 100);

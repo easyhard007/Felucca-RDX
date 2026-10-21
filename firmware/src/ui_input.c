@@ -1047,8 +1047,14 @@ static void edit_param(uint32_t slot, int32_t steps)
     v = param_turn(d, *vp, accel(EN_K1 + slot, steps, d->fmt == F_ENUM ? 0 : d->max - d->min));
     *vp = (int16_t)v;
     if (pg->scope != SC_GLOBAL) {
-        motion_capture(TSEL, (uint32_t)(vp - TSEL->p), *vp);
-        ml_knob(TSEL, (uint32_t)(vp - TSEL->p));        /* (MIDI LEARN: picked) */
+        uint32_t id = (uint32_t)(vp - TSEL->p);
+#if FELUCCA_RDX
+        if (TSEL->engine == ENGI_RDX && (id == P_VOICE || id == P_GLIDE))
+            rdx_voice_settings_set(TSEL, (uint32_t)clamp(TSEL->p[P_VOICE], 0, 2),
+                                   (uint32_t)clamp(TSEL->p[P_GLIDE], 0, 127));
+#endif
+        motion_capture(TSEL, id, *vp);
+        ml_knob(TSEL, id);                              /* (MIDI LEARN: picked) */
     }
 }
 

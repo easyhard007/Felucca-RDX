@@ -480,7 +480,11 @@ static int up_load(uint32_t k)
                 t->p[i] = v[i];
         t->preset = 0;
         fm1_irq_on();
+#if FELUCCA_RDX
+        rdx_track_restored(t);                          /* RDX: P_E7 owns its patch and MONO / LEGATO mode */
+#else
         upf_track_load(t, k);                           /* FM6: the preset's own patch (up_fm6.c) */
+#endif
     }
     t->user = (uint8_t)(k + 1u);
     load_end(t);

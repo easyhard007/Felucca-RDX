@@ -196,11 +196,19 @@ static void con_status(void)
     con_puts(FELUCCA_VERSION);
     con_puts("\r\n");
     con_kv("uptime_ms", (int32_t)fm1_ms);
-    con_kv("cpu_pct", (int32_t)(song.cpu_q8 * 100u / 256u));
+    con_kv("cpu_pct", (int32_t)(song.cpu_q8 * 100u / 256u));       /* compatibility: CORE 0 */
+    con_kv("cpu0_pct", (int32_t)(song.cpu_q8 * 100u / 256u));
     con_kv("audio_max_us", (int32_t)felucca_dbg.max_us);
     con_kv("audio_late", (int32_t)felucca_dbg.late);
     con_kv("voices_shed", (int32_t)shed_count);
+#if FELUCCA_RDX
+    con_kv("rdx_avg_us", rdx_perf.valid ? (int32_t)((rdx_perf.avg_q8 + 128u) >> 8) : -1);
+    con_kv("rdx_peak_us", rdx_perf.valid ? (int32_t)rdx_perf.peak_us : -1);
+    con_kv("rdx_voices", (int32_t)rdx_perf.voices);
+#endif
 #if FELUCCA_CPU2
+    con_kv("cpu1_pct", (int32_t)(song.cpu1_q8 * 100u / 256u));
+    con_kv("cpu1_max_us", (int32_t)audio_c1_max_us);
     con_kv("cpu2_set", (ui_prefs2 & (PREF_CPU2_ON >> 16)) != 0u);   /* MENU > 2ND CORE: 1 ON (from power-on), 0 OFF */
     con_kv("cpu2", fm1_c1_on);                          /* the second core renders parts (hal/fm1_cpu1.h) */
     con_kv("cpu2_gave_up", fm1_c1_gave_up);             /* 1: it misread a job, 2: one timed out (then one core) */

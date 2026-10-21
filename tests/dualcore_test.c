@@ -124,6 +124,23 @@ int main(void)
     static char names[256][40];
     static const char *const MASKS[] = {"rot", "auto", "5", "10", "3", "12", "1"};
     uint32_t n = 0, e, i, k, g, fail = 0;
+#if FELUCCA_RDX
+    memset(part_cost, 0, sizeof part_cost);
+    part_cost[0] = 8u * ENG_VCOST[ENGI_RDX] + 60u;
+    if (mix_split()) {
+        printf("dualcore: RDX incorrectly uses the whole-Part split       FAIL\n");
+        fail++;
+    } else {
+        printf("dualcore: RDX reserves Core1 for its within-Part voices   ok\n");
+    }
+    part_cost[0] = 0;
+    if (mix_split()) {
+        printf("dualcore: an idle RDX mix still hands work to core 1       FAIL\n");
+        fail++;
+    } else {
+        printf("dualcore: an idle RDX mix leaves core 1 idle               ok\n");
+    }
+#endif
     for (e = 0; e < NENGINES; e++) {                    /* every preset: four parts at a time */
         if (!eng_ok(e))                                 /* (a retired number: DIGITAL without FELUCCA_FM4) */
             continue;

@@ -18,7 +18,9 @@ static pthread_mutex_t c1h_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t c1h_cv = PTHREAD_COND_INITIALIZER;
 static void (*c1h_fn)(uint32_t);
 static uint32_t c1h_arg, c1h_job, c1h_done, c1h_up, c1h_blocks, c1h_taken;
+static uint32_t c1h_fail_wait_at;                    /* fault injection after a job advanced its voices */
 static int c1h_off;                                 /* 1: no second core (the reference renders) */
+static uint32_t fm1_c1_wait_ticks_half;              /* real HAL metric; waits block on the condition here */
 
 static void *c1h_main(void *x)
 {
@@ -64,6 +66,10 @@ static int c1h_wait(void)
     while (c1h_done != c1h_job)
         pthread_cond_wait(&c1h_cv, &c1h_mu);
     pthread_mutex_unlock(&c1h_mu);
+    if (c1h_fail_wait_at && c1h_taken == c1h_fail_wait_at) {
+        c1h_off = 1;                                  /* worker is idle: models HAL holding it */
+        return -1;
+    }
     return 0;
 }
 
@@ -86,3 +92,4 @@ static uint32_t c1h_split(void)
 #define C1_RUN(fn, arg) c1h_run(fn, arg)
 #define C1_WAIT() c1h_wait()
 #define C1_SPLIT() c1h_split()
+#define C1_TICKS() 0u                                /* the host concurrency test does not emulate TIMER4 */

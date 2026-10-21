@@ -350,14 +350,30 @@ static void menu_row(uint32_t k, uint32_t row)
         }
     }
 }
-/* MENU > SYSTEM > INFO (1.2, ui.menu 3): what the old GLO > SYSTEM page showed, read only: the firmware, the USB link (the
- * SYSTEM page's MIDI card: OFF no USB, WAIT no bus yet, BUS frames seen, ENUM being set up, MIDI in use) and the CPU load
- * of the audio (its SYSTEM card; the shown value follows every INFO_CPU_MS, not every frame). The rows as the menu's (no
- * tabs: from INFO_Y), the selected look on none; OCT- back to the tabs, HOME closes */
+/* MENU > SYSTEM > INFO (1.2, ui.menu 3): firmware, USB and the two audio cores. CORE 0 excludes synchronization waiting;
+ * CORE 1 is the time actually spent rendering its assigned parts or RDX voices. Peaks
+ * are microseconds since boot. The RDX build adds a scrollable deadline profile: three global maxima followed by an
+ * internally consistent breakdown of the most recent AUDIO LATE half. A one-core build says OFF for CORE 1. Values
+ * follow every INFO_CPU_MS. */
 #define INFO_Y 32
-#define INFO_N 3u
+#if FELUCCA_RDX
+#define INFO_N 25u
+#else
+#define INFO_N 6u
+#endif
 #define INFO_CPU_MS 500u
-static struct { uint8_t cpu; uint32_t t; } info;
+static struct {
+    uint16_t c0, c1, p0, p1;
+#if FELUCCA_RDX
+    uint16_t ravg, rpeak;
+    uint8_t rvoices, rvalid;
+    uint16_t wall_peak, irq_peak, wait_peak;
+    uint32_t late_count;
+    uint8_t late_source;
+    audio_timing_sample_t late;
+#endif
+    uint32_t t;
+} info;
 static uint32_t info_usb(void)                         /* 0 OFF, 1 WAIT, 2 BUS, 3 ENUM, 4 MIDI */
 {
     return !usb.up ? 0u : usb.config ? 4u : usb.setups ? 3u : usb.sof_seen ? 2u : 1u;
@@ -366,33 +382,146 @@ static uint32_t info_sig(void)
 {
     if (fm1_ms - info.t >= INFO_CPU_MS) {
         info.t = fm1_ms;
-        info.cpu = (uint8_t)(song.cpu_q8 * 100u / 256u);
+        info.c0 = (uint16_t)clamp((int32_t)(song.cpu_q8 * 100u / 256u), 0, 999);
+        info.p0 = (uint16_t)clamp((int32_t)audio_max_us, 0, 65535);
+#if FELUCCA_RDX
+        info.ravg = (uint16_t)clamp((int32_t)((rdx_perf.avg_q8 + 128u) >> 8), 0, 65535);
+        info.rpeak = rdx_perf.peak_us;
+        info.rvoices = rdx_perf.voices;
+        info.rvalid = rdx_perf.valid;
+        info.wall_peak = (uint16_t)clamp((int32_t)audio_timing.peak.wall, 0, 65535);
+        info.irq_peak = (uint16_t)clamp((int32_t)audio_timing.peak.irq, 0, 65535);
+        info.wait_peak = (uint16_t)clamp((int32_t)audio_timing.peak.wait, 0, 65535);
+        info.late_count = audio_late_notice;
+        info.late_source = audio_timing.late_source;
+#define INFO_LATE_COPY(field) info.late.field = audio_timing.late.field
+        INFO_LATE_COPY(wall); INFO_LATE_COPY(irq); INFO_LATE_COPY(c0); INFO_LATE_COPY(wait);
+        INFO_LATE_COPY(c1); INFO_LATE_COPY(t5); INFO_LATE_COPY(pre); INFO_LATE_COPY(rdx_ctl);
+        INFO_LATE_COPY(c0_fm); INFO_LATE_COPY(xfer); INFO_LATE_COPY(post_fx);
+        INFO_LATE_COPY(tail); INFO_LATE_COPY(other);
+#undef INFO_LATE_COPY
+#endif
+#if FELUCCA_CPU2
+        if (fm1_c1_on) {
+            info.c1 = (uint16_t)clamp((int32_t)(song.cpu1_q8 * 100u / 256u), 0, 999);
+            info.p1 = (uint16_t)clamp((int32_t)audio_c1_max_us, 0, 65535);
+        } else
+#endif
+        {
+            info.c1 = 0xFFFFu;
+            info.p1 = 0;
+        }
     }
-    return info.cpu * 7u + info_usb() * 131u + 1u;
+    return info.c0 * 7u + info.c1 * 17u + info.p0 * 31u + info.p1 * 47u + info_usb() * 131u +
+#if FELUCCA_RDX
+           info.ravg * 73u + info.rpeak * 89u + info.rvoices * 101u + info.rvalid * 113u +
+           info.wall_peak * 127u + info.irq_peak * 137u + info.wait_peak * 149u +
+           info.late_count * 157u + info.late_source * 163u + info.late.wall * 167u + info.late.irq * 173u +
+           info.late.c0 * 179u + info.late.wait * 181u + info.late.c1 * 191u + info.late.t5 * 193u +
+           info.late.pre * 197u + info.late.rdx_ctl * 199u + info.late.c0_fm * 211u + info.late.xfer * 223u +
+           info.late.post_fx * 227u + info.late.tail * 229u + info.late.other * 233u +
+#endif
+           1u;
 }
+#if FELUCCA_RDX
+#define INFO_ROW_H 18
+static int32_t info_scroll_max(void)
+{
+    int32_t bottom = INFO_Y + 2 * MP_PAD + (int32_t)INFO_N * (INFO_ROW_H + 2) - 2;
+    return bottom > 238 ? bottom - 238 : 0;
+}
+#endif
+
 static void info_rows(void)                            /* (in screen rows: cv_oy set by the caller) */
 {
-    static const char *const LBL[INFO_N] = {"FIRMWARE", "USB", "CPU"};
+#if FELUCCA_RDX
+    static const char *const LBL[INFO_N] = {
+        "RDX AVG", "RDX PEAK", "RDX VOICES", "CORE 0", "C0 PEAK", "CORE 1", "C1 PEAK",
+        "WALL MAX", "IRQ MAX", "WAIT MAX", "LATE COUNT", "LATE SOURCE",
+        "L WALL", "L IRQ", "L C0 BUSY", "L C1 WAIT", "L C1 WORK", "L T5 IRQ",
+        "L PRE", "L RDX CTL", "L C0 FM", "L XFER", "L POST FX", "L TAIL", "L OTHER"
+    };
+    int32_t h = INFO_ROW_H, scroll = ui.menu_scroll;
+#else
+    static const char *const LBL[INFO_N] = {"FIRMWARE", "USB", "CORE 0", "C0 PEAK", "CORE 1", "C1 PEAK"};
     static const char *const USB_N[5] = {"OFF", "WAIT", "BUS", "ENUM", "MIDI"};
-    int32_t h = menu_large() ? 28 : 24;
+    int32_t h = menu_large() ? 28 : 24, scroll = 0;
+#endif
     uint32_t k;
-    char cpu[8];
-    fmt_int(cpu, info.cpu);
     if (!ux.style)                                     /* FLAT: the rows' panel */
-        cv_rrect(4, INFO_Y, 232, (int32_t)INFO_N * (h + 2) - 2 + 2 * MP_PAD, 8, T_SURF, T_BG);
+        cv_rrect(4, INFO_Y - scroll, 232, (int32_t)INFO_N * (h + 2) - 2 + 2 * MP_PAD, 8, T_SURF, T_BG);
     for (k = 0; k < INFO_N; k++) {
-        int32_t y = INFO_Y + MP_PAD + (int32_t)k * (h + 2), vy = y + CAP_IN(M, h);
+        int32_t y = INFO_Y + MP_PAD + (int32_t)k * (h + 2) - scroll, vy = y + CAP_IN(M, h);
         if (k)
             cv_rect(MR_X + 6, y - 1, MR_W - 12, 1, ux.style ? T_RULE : T_LINE);
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "info row name centred up/down");
         cv_text_on(MR_LX, vy, &AF_M, LBL[k], T_TEXT, T_SURF);
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "info row value centred up/down");
-        if (k == 2u) {                                 /* CPU: the value and its unit, as HOLD's */
-            GFX_HOOK_ALIGN(0, 0, 0, vy + AF_M.asc, AL_B, "info row unit on its value's baseline");
-            cv_text_r(cv_text_r(MR_VR, vy + AF_M.asc - AF_S.asc, &AF_S, "%", T_MID, T_SURF) - 3, vy, &AF_M, cpu, T_THEME, T_SURF);
-        } else {
-            cv_text_r(MR_VR, vy, &AF_M, k ? USB_N[info_usb()] : FELUCCA_VERSION, T_THEME, T_SURF);
+#if FELUCCA_RDX
+        {
+            uint32_t v = 0;
+            const char *unit = "us";
+            int valid = 1;
+            char b[16];
+            switch (k) {
+            case 0: v = info.ravg; valid = info.rvalid; break;
+            case 1: v = info.rpeak; valid = info.rvalid; break;
+            case 2: v = info.rvoices; unit = 0; break;
+            case 3: v = info.c0; unit = "%"; break;
+            case 4: v = info.p0; break;
+            case 5: v = info.c1; unit = "%"; valid = info.c1 != 0xFFFFu; break;
+            case 6: v = info.p1; valid = info.c1 != 0xFFFFu; break;
+            case 7: v = info.wall_peak; break;
+            case 8: v = info.irq_peak; break;
+            case 9: v = info.wait_peak; break;
+            case 10: v = info.late_count; unit = 0; break;
+            case 12: v = info.late.wall; valid = info.late_count != 0u; break;
+            case 13: v = info.late.irq; valid = info.late_count != 0u; break;
+            case 14: v = info.late.c0; valid = info.late_count != 0u; break;
+            case 15: v = info.late.wait; valid = info.late_count != 0u; break;
+            case 16: v = info.late.c1; valid = info.late_count != 0u; break;
+            case 17: v = info.late.t5; valid = info.late_count != 0u; break;
+            case 18: v = info.late.pre; valid = info.late_count != 0u; break;
+            case 19: v = info.late.rdx_ctl; valid = info.late_count != 0u; break;
+            case 20: v = info.late.c0_fm; valid = info.late_count != 0u; break;
+            case 21: v = info.late.xfer; valid = info.late_count != 0u; break;
+            case 22: v = info.late.post_fx; valid = info.late_count != 0u; break;
+            case 23: v = info.late.tail; valid = info.late_count != 0u; break;
+            case 24: v = info.late.other; valid = info.late_count != 0u; break;
+            default: unit = 0; break;
+            }
+            if (k == 11u) {
+                const char *src = info.late_source == (AUDIO_LATE_C0 | AUDIO_LATE_C1) ? "BOTH" :
+                                  info.late_source == AUDIO_LATE_C0 ? "CORE0" :
+                                  info.late_source == AUDIO_LATE_C1 ? "CORE1" : "SYNC";
+                cv_text_r(MR_VR, vy, &AF_M, info.late_count ? src : "--", T_THEME, T_SURF);
+            } else if (!valid)
+                cv_text_r(MR_VR, vy, &AF_M, k == 5u || k == 6u ? "OFF" : "--", T_THEME, T_SURF);
+            else {
+                fmt_int(b, (int32_t)v);
+                if (unit)
+                    cv_text_r(cv_text_r(MR_VR, vy + AF_M.asc - AF_S.asc, &AF_S, unit, T_MID, T_SURF) - 3,
+                              vy, &AF_M, b, T_THEME, T_SURF);
+                else
+                    cv_text_r(MR_VR, vy, &AF_M, b, T_THEME, T_SURF);
+            }
         }
+#else
+        if (k == 2u || (k == 4u && info.c1 != 0xFFFFu)) {
+            char b[8];
+            fmt_int(b, k == 2u ? info.c0 : info.c1);
+            cv_text_r(cv_text_r(MR_VR, vy + AF_M.asc - AF_S.asc, &AF_S, "%", T_MID, T_SURF) - 3,
+                      vy, &AF_M, b, T_THEME, T_SURF);
+        } else if (k == 3u || (k == 5u && info.c1 != 0xFFFFu)) {
+            char b[8];
+            fmt_int(b, k == 3u ? info.p0 : info.p1);
+            cv_text_r(cv_text_r(MR_VR, vy + AF_M.asc - AF_S.asc, &AF_S, "us", T_MID, T_SURF) - 3,
+                      vy, &AF_M, b, T_THEME, T_SURF);
+        } else {
+            const char *v = k == 0u ? FELUCCA_VERSION : k == 1u ? USB_N[info_usb()] : "OFF";
+            cv_text_r(MR_VR, vy, &AF_M, v, T_THEME, T_SURF);
+        }
+#endif
     }
 }
 
@@ -422,7 +551,8 @@ static void draw_menu(void)
           (uint32_t)(song.g[G_TUNE] + 64) * 8191u + (uint32_t)song.g[G_ROUTE] * 27449u +   /* (1.2: the project's rows) */
           (song.mch[0] | (uint32_t)song.mch[1] << 8 | (uint32_t)song.mch[2] << 16 | (uint32_t)song.mch[3] << 24) *
           2246822519u +                                   /* (1.5.5: T1..T4 CHANNEL) */
-          (ui.menu == 2 ? ui.menu_scroll * 48611u : 0u) + (ui.menu == 3 ? info_sig() * 2654435761u : 0u);
+          (ui.menu == 2 ? ui.menu_scroll * 48611u : 0u) +
+          (ui.menu == 3 ? info_sig() * 2654435761u + ui.menu_scroll * 48611u : 0u);
     if (!ui.force && sig == ui.menu_sig) {
         if (ui.menu == 1 && mt.pos != pos0) {          /* only the tabs slid: their strip */
             cv_begin(240, MP_Y - H_HEAD, T_BG);
@@ -440,8 +570,17 @@ static void draw_menu(void)
             uint32_t top_y = pass ? 132u : (uint32_t)H_HEAD;
             cv_begin(240, pass ? 240u - 132u : 132u - H_HEAD, T_BG);
             cv_oy = -(int32_t)top_y;
-            if (!pass)
-                info_rows();
+            info_rows();                                /* each clipped band draws the rows which intersect it */
+#if FELUCCA_RDX
+            {
+                int32_t max = info_scroll_max(), view = 240 - INFO_Y - 4;
+                int32_t thumb = max ? view * view / (view + max) : view;
+                if (thumb < 12) thumb = 12;
+                cv_rrect(235, INFO_Y + 2, 3, view, 1, T_LINE, T_BG);
+                cv_rrect(235, INFO_Y + 2 + (max ? ui.menu_scroll * (view - thumb) / max : 0),
+                         3, thumb, 1, T_MID, T_LINE);
+            }
+#endif
             cv_oy = 0;
             cv_blit(0, top_y);
         }
@@ -524,12 +663,16 @@ static void menu_input(uint32_t oct)                  /* oct: ui_input.c oct_tap
 {
     int32_t s;
     uint32_t k, up = (oct >> 1) & 1u, dn = oct & 1u;
-    if (ui.menu >= 2) {                                /* ABOUT: PRESETS scrolls (bounded); INFO, ABOUT: OCT- back to
-                                                        * the tabs */
+    if (ui.menu >= 2) {                                /* INFO / ABOUT: PRESETS scrolls; OCT- goes back to the tabs */
         if (dn)
             ui.menu = 1, ui.force = 1;
         else if (ui.menu == 2 && (s = panel_enc(EN_PRESET)) != 0)
             ui.menu_scroll = (uint16_t)clamp((int32_t)ui.menu_scroll + clamp(s, -128, 128) * 18, 0, menu_scroll_max());
+#if FELUCCA_RDX
+        else if (ui.menu == 3 && (s = panel_enc(EN_PRESET)) != 0)
+            ui.menu_scroll = (uint16_t)clamp((int32_t)ui.menu_scroll + clamp(s, -128, 128) * (INFO_ROW_H + 2),
+                                             0, info_scroll_max());
+#endif
         enc_drop();
         return;
     }
@@ -555,6 +698,7 @@ static void menu_input(uint32_t oct)                  /* oct: ui_input.c oct_tap
             ui.force = 1;
         } else if (ui.menu_sel == MI_INFO) {
             ui.menu = 3;
+            ui.menu_scroll = 0;
             info.t = fm1_ms - INFO_CPU_MS;              /* (the CPU load read at once) */
             ui.force = 1;
         } else {                                       /* MI_ABOUT */

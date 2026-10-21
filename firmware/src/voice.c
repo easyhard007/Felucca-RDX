@@ -12,6 +12,43 @@
  * declicks it); one of the part's own is restarted in place, as before. Extra UNISON
  * voices only start when there is room. */
 static uint32_t vage;                                   /* voice ages: one clock for every part */
+
+/* Native audio deadline profiler.  cur contains TIMER4 ticks accumulated by
+ * Core0 during one 128-sample half.  audio.c publishes the per-field maxima
+ * and an internally consistent snapshot of the most recent late half in us.
+ * Keep the type available in host builds so the real INFO page can be tested;
+ * the phase probes themselves compile only when the hardware clock exists. */
+typedef struct {
+    uint32_t wall, irq, c0, wait, c1, t5;
+    uint32_t pre, rdx_ctl, c0_fm, xfer, post_fx, tail, other;
+} audio_timing_sample_t;
+static struct {
+    audio_timing_sample_t cur;
+    volatile audio_timing_sample_t peak;
+    volatile audio_timing_sample_t late;
+    volatile uint8_t late_source;
+} audio_timing;
+
+#if FELUCCA_RDX && defined(FM1_TICKS_PER_US)
+#define AUDIO_TIMING_ON 1
+#define AUDIO_TIME_START(name) uint32_t name = fm1_ticks()
+#define AUDIO_TIME_ADD(field, name) (audio_timing.cur.field += fm1_ticks() - (name))
+#else
+#define AUDIO_TIMING_ON 0
+#define AUDIO_TIME_START(name)
+#define AUDIO_TIME_ADD(field, name) ((void)0)
+#endif
+
+#if FELUCCA_CPU2
+/* Actual Core1 render time in the current audio half.  Both whole-part jobs
+ * (fx.c) and RDX within-part voice jobs add to this counter. */
+static volatile uint32_t c1_half_ticks;
+static volatile uint8_t c1_inside_part_job;             /* prevents a nested Core1 dispatch from track_render */
+static volatile uint8_t c1_outer_active;                /* Core0 already handed whole Parts to Core1 */
+#ifndef C1_TICKS
+#define C1_TICKS() fm1_ticks()
+#endif
+#endif
 static int32_t lfo_wave(track_t *t, uint32_t ph)
 {
     switch (t->p[P_LWAVE]) {
@@ -115,6 +152,13 @@ static uint32_t trk_nvoice(const track_t *t)
     return c && c < NVOICE ? c : NVOICE;
 }
 
+/* Generic Felucca engines use their full voice cap in UNI.  RDX exposes the
+ * original Reface Part Modes instead and never enters this path. */
+static uint32_t trk_unison_voices(const track_t *t)
+{
+    return trk_nvoice(t);
+}
+
 /* the part's voice mode: P_VOICE, POLY for an engine of hits (engine_t.oneshot: DRUM) */
 static uint32_t trk_vmode(const track_t *t)
 {
@@ -176,10 +220,13 @@ static uint32_t voice_victim(const track_t *self, int soft, track_t **pp)
 }
 
 static uint32_t voice_kills;                            /* voices given up (budget, overload): console, hostsim */
-static void voice_kill(voice_t *v)                      /* fade out over the next block (env_tick stage 4) */
+static void voice_kill(track_t *t, voice_t *v)           /* stage 4: generic one-block fade, or engine tail */
 {
+    const engine_t *e = ENGINES[t->engine];
     v->gate = 0;
     v->stage = 4;
+    if (e->force_stop)
+        e->force_stop(t, v);
     voice_kills++;
 }
 
@@ -194,7 +241,7 @@ static int voice_room(track_t *t, int soft)
     if (k == NVOICE)
         return !soft;                                   /* hard: over the budget (cannot happen: each of the
                                                          * NPART < NVOICE parts protects one voice at most) */
-    voice_kill(&vp->v[k]);
+    voice_kill(vp, &vp->v[k]);
     return 1;
 }
 
@@ -233,7 +280,7 @@ static voice_t *voice_alloc(track_t *t, uint32_t note)
         if (k < np && vp == t)
             return &t->v[k];                            /* our own: restart it in place (no click) */
         if (k < NVOICE)
-            voice_kill(&vp->v[k]);
+            voice_kill(vp, &vp->v[k]);
     }
     if (t->p[P_ALLOC] || t->p[P_GLIDE]) {
         for (i = 0; i < np; i++) {
@@ -336,7 +383,7 @@ static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int
  * engine's voice cap, spread by DETUNE over the same width) */
 static void mono_play(track_t *t, uint32_t note, uint32_t vel, int retrig, int glide)
 {
-    uint32_t mode = (uint32_t)t->p[P_VOICE], nv = mode == V_UNISON ? trk_nvoice(t) : 1u, i;
+    uint32_t mode = (uint32_t)t->p[P_VOICE], nv = mode == V_UNISON ? trk_unison_voices(t) : 1u, i;
     for (i = 0; i < nv; i++) {
         voice_t *v = &t->v[i];
         int32_t k = 2 * (int32_t)i - (int32_t)(nv - 1u);   /* -7 .. 7 */
@@ -374,6 +421,12 @@ static uint32_t mono_pick(const track_t *t)
     if (!t->nmono)
         return 0;
     n = t->mono_stack[t->nmono - 1u];
+#if FELUCCA_RDX
+    /* The Reface allocator is last-note priority.  Felucca's LOW/HIGH option
+     * remains available to its native engines only. */
+    if (t->engine == ENGI_RDX)
+        return n;
+#endif
     for (i = 0; i < t->nmono; i++) {
         if (t->p[P_PRIO] == 1 && t->mono_stack[i] < n)
             n = t->mono_stack[i];
@@ -407,6 +460,13 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
         t->xp_vel[i] = (uint8_t)vel;
         return;
     }
+#if FELUCCA_RDX
+    if (t->engine == ENGI_RDX) {
+        mode = mode > V_LEGATO ? V_LEGATO : mode;
+        t->p[P_VOICE] = (int16_t)mode;
+        rdx_voice_settings_set(t, mode, (uint32_t)clamp(t->p[P_GLIDE], 0, 127));
+    }
+#endif
     vel = mod_note(t, note, vel);                       /* the matrix's VEL / KEY / RAND (1.5.6: VEL as a destination) */
     for (i = 0; i < NVOICE; i++)
         any |= t->v[i].gate;
@@ -420,7 +480,11 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
         t->nmono = 0;                                   /* no stale mono stack after a mode change */
         t->mono_note = 0;
         v->fine = 0;
-        voice_start(t, v, note, vel, t->p[P_GLIDE] != 0 && !ENGINES[t->engine]->oneshot);
+        voice_start(t, v, note, vel,
+#if FELUCCA_RDX
+                    t->engine != ENGI_RDX &&
+#endif
+                    t->p[P_GLIDE] != 0 && !ENGINES[t->engine]->oneshot);
         return;
     }
     {
@@ -432,6 +496,11 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
         want = mono_pick(t);
         if (sounding && want == t->mono_note)
             return;                                     /* LOW / HIGH priority: this key does not win */
+#if FELUCCA_RDX
+        if (t->engine == ENGI_RDX)                      /* both Reface mono modes share one live voice; its patch */
+            mono_play(t, want, vel, !sounding, 0);      /* decides FULL vs LEGATO portamento internally */
+        else
+#endif
         if (mode == V_MONO)                             /* MONO: always retrigger, glide when GLIDE is set */
             mono_play(t, want, vel, 1, t->p[P_GLIDE] != 0 || t->slide_glide);
         else                                            /* LEGATO / UNISON: glide only between held notes */
@@ -450,11 +519,15 @@ static void trk_note_off(track_t *t, uint32_t note)
     t->xp_n = (uint8_t)k;
     mono_remove(t, note);                              /* a mode change must not retain a released key */
     if (mode != V_POLY) {
-        uint32_t nv = mode == V_UNISON ? trk_nvoice(t) : 1u;
+        uint32_t nv = mode == V_UNISON ? trk_unison_voices(t) : 1u;
         if (t->mono_note == note) {
             uint32_t next = mono_pick(t);
             if (next) {                                 /* fall back to a held note, legato */
-                mono_play(t, next, t->v[0].vel, 0, t->p[P_GLIDE] != 0);
+                mono_play(t, next, t->v[0].vel, 0,
+#if FELUCCA_RDX
+                          t->engine != ENGI_RDX &&
+#endif
+                          t->p[P_GLIDE] != 0);
             } else {
                 for (i = 0; i < nv; i++)
                     if (t->v[i].gate) {
@@ -659,10 +732,183 @@ static __attribute__((noinline)) void spread_sum(int32_t *out)
 /* render one block of a part into out (cleared here); returns the voices rendered */
 /* Channel bend is live performance state, outside projects/presets. Q8 semitones. */
 static int32_t midi_bend_q8[NTRK], midi_bend_target[NTRK];
+
+typedef struct {
+    const engine_t *e;
+    const int16_t *p;
+    int32_t lfo, tune, tune_fine, bend16, bend_fine;
+    uint32_t fade;
+} voice_render_ctl_t;
+
+/* Advance one voice's control-rate state on Core0.  The expensive engine
+ * sample loop can then run on either core without touching shared part state. */
+static int voice_render_prepare(track_t *t, voice_t *v, const voice_render_ctl_t *c, vmod_t *m)
+{
+    int32_t env, pitch;
+    if (!v->active)
+        return 0;
+    /* RDX owns release and its 256-sample forced tail. A generic REL=0
+     * must not deactivate it before rdx_done() gets to inspect that state. */
+#if FELUCCA_RDX
+    if (c->e == &ENG_RDX)
+        env = 32767;
+    else
+#endif
+        env = v->stage == 4u && c->e->force_stop ? 32767 : env_tick(t, v);
+    if (c->e->ownenv && v->active) {
+        if (c->e->done(t, v)) {
+            v->active = v->gate = 0;
+            v->stage = 0;
+            v->env = v->env_out = 0;
+            return 0;
+        }
+        v->env = 1 << 24;
+        env = 32767;
+    }
+    if (c->e->amp)
+        env = c->e->amp(t, v, env);
+    m->envq15 = c->e->ownenv ? 0 : env;
+    m->amp1 = c->e->ownenv ? env : mulq15(env, v->vel * 258);
+    if (c->p[P_LD_AMP])
+        m->amp1 = mulq15(m->amp1, 32767 - mulq15(c->p[P_LPOL] ? c->lfo : (c->lfo + 32768) >> 1,
+                                                    c->p[P_LD_AMP] * 258));
+    if (c->fade)
+        m->amp1 = m->amp1 * (int32_t)(t->xf - 1u) / (int32_t)XF_BLOCKS;
+    m->amp0 = v->env_out;
+    v->env_out = m->amp1;
+    if (v->pitch_cur != v->pitch16) {
+        int32_t d = v->pitch16 - v->pitch_cur;
+        int32_t st = v->gstep ? v->gstep : (int32_t)(ENV_LIN[(c->p[P_GLIDE] ? c->p[P_GLIDE] : 40) & 127] >> 14);
+        if (st < 1)
+            st = 1;
+        v->pitch_cur += d > 0 ? (d < st ? d : st) : (-d < st ? d : -st);
+    }
+    if (!env && !m->amp0 && v->stage == 2 && !c->e->sampled)
+        return 0;
+    pitch = v->pitch_cur + c->tune + c->bend16 + ((c->lfo * c->p[P_LD_PIT] * 3) >> 15) +
+            ((m->envq15 * c->p[P_ED_PIT] * 3) >> 15);
+    m->pitch16 = clamp(pitch, 0, 2047);
+    m->inc = pitch_inc(m->pitch16);
+    m->fine = v->fine + c->tune_fine + c->bend_fine;
+    if (m->fine)
+        m->inc += (uint32_t)((int32_t)(m->inc >> 12) * m->fine);
+    m->cutoff = ((c->lfo * c->p[P_LD_FLT]) >> 7) + ((m->envq15 * c->p[P_ED_FLT]) >> 7);
+    if (v->vel > 110)
+        m->cutoff += (m->envq15 * 24) >> 7;
+    m->shape = (64 << 8) + ((c->lfo * c->p[P_LD_SHP]) >> 7) + ((m->envq15 * c->p[P_ED_SHP]) >> 7);
+    if (MOD(t).on)
+        mod_voice(t, v, m, m->fine);
+    return 1;
+}
+
+#if FELUCCA_RDX && FELUCCA_CPU2
+typedef struct {
+    track_t *t;
+    vmod_t mod[NVOICE];
+    uint32_t mask, n;
+    uint8_t spread;
+} rdx_c1_voice_job_t;
+
+static rdx_c1_voice_job_t rdx_c1_voice_job;
+static int32_t rdx_c1_voice_out[CTL], rdx_c1_voice_spread[CTL];
+/* Only Core1's assigned voices are saved, before publishing its job. If it
+ * stalls midway through a sample, recovery must restart at the block boundary. */
+static rdx_note_t rdx_c1_before[5u];
+
+/* Keep Core0 below the measured AC79 bottleneck.  It still prepares every
+ * voice, mixes the returned samples and runs the effects, so an even voice
+ * split is not an even CPU split. */
+static uint32_t rdx_c1_voice_count(uint32_t nr)
+{
+    /* Hardware captures show that the serial Core0 work happens outside the
+     * parallel FM window, so overloading Core1 does not hide that cost.  Keep
+     * the high-polyphony FM loops balanced: 6 = 3:3, 7 = 3:4, 8 = 4:4. */
+    static const uint8_t count[NVOICE + 1u] = {0, 1, 2, 2, 3, 3, 3, 4, 4};
+    return count[nr <= NVOICE ? nr : NVOICE];
+}
+
+static void rdx_c1_voices(uint32_t unused)
+{
+    rdx_c1_voice_job_t *j = &rdx_c1_voice_job;
+    const engine_t *e = ENGINES[j->t->engine];
+    uint32_t i, t0 = C1_TICKS();
+    (void)unused;
+    for (i = 0; i < j->n; i++)
+        rdx_c1_voice_out[i] = rdx_c1_voice_spread[i] = 0;
+    for (i = 0; i < NVOICE; i++)
+        if ((j->mask >> i) & 1u) {
+            voice_t *v = &j->t->v[i];
+            e->render(j->t, v, j->spread && !v->side ? rdx_c1_voice_spread : rdx_c1_voice_out,
+                      j->n, &j->mod[i]);
+        }
+    c1_half_ticks += C1_TICKS() - t0;
+}
+
+/* Split the active voices of one RDX Part between both cores.  Control state
+ * was prepared above on Core0; only independent per-voice FM sample loops run
+ * concurrently.  Core1 deliberately gets the larger share because Core0
+ * also prepares controls and processes the entire effects/mix path. */
+static void rdx_render_parallel(track_t *t, const engine_t *e, int32_t *out, uint32_t n,
+                                uint32_t valid, uint32_t nr)
+{
+    uint32_t i, saved = 0, need = rdx_c1_voice_count(nr), c1mask = 0;
+    int handed;
+    AUDIO_TIME_START(t_xfer0);
+    for (i = 0; i < NVOICE && need; i++)
+        if ((valid >> i) & 1u)
+            c1mask |= 1u << i, need--;
+    rdx_c1_voice_job.t = t;
+    rdx_c1_voice_job.mask = c1mask;
+    rdx_c1_voice_job.n = n;
+    rdx_c1_voice_job.spread = (uint8_t)!!T_SPREAD(t);
+    for (i = 0; i < NVOICE; i++)
+        if ((c1mask >> i) & 1u)
+            rdx_c1_before[saved++] = *rdx_note(t, &t->v[i]);
+    handed = c1mask && C1_ON() && C1_RUN(rdx_c1_voices, 0);
+    if (!handed)
+        c1mask = 0;
+    AUDIO_TIME_ADD(xfer, t_xfer0);
+    AUDIO_TIME_START(t_c0fm);
+    for (i = 0; i < NVOICE; i++)
+        if (((valid & ~c1mask) >> i) & 1u) {
+            voice_t *v = &t->v[i];
+            e->render(t, v, T_SPREAD(t) > v->side ? SPREAD_BUF(t) : out, n, &rdx_c1_voice_job.mod[i]);
+        }
+    AUDIO_TIME_ADD(c0_fm, t_c0fm);
+    if (handed) {
+        if (C1_WAIT()) {
+            /* C1_WAIT has held the failed core. Discard its private output
+             * and restore all assigned states before rendering exactly once. */
+            saved = 0;
+            for (i = 0; i < NVOICE; i++)
+                if ((c1mask >> i) & 1u)
+                    *rdx_note(t, &t->v[i]) = rdx_c1_before[saved++];
+            AUDIO_TIME_START(t_recover);
+            for (i = 0; i < NVOICE; i++)
+                if ((c1mask >> i) & 1u) {
+                    voice_t *v = &t->v[i];
+                    e->render(t, v, T_SPREAD(t) > v->side ? SPREAD_BUF(t) : out, n,
+                              &rdx_c1_voice_job.mod[i]);
+                }
+            AUDIO_TIME_ADD(c0_fm, t_recover);
+        } else {
+            AUDIO_TIME_START(t_merge);
+            for (i = 0; i < n; i++) {
+                out[i] += rdx_c1_voice_out[i];
+                if (T_SPREAD(t))
+                    SPREAD_BUF(t)[i] += rdx_c1_voice_spread[i];
+            }
+            AUDIO_TIME_ADD(xfer, t_merge);
+        }
+    }
+}
+#endif
+
 static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
 {
     const engine_t *e = ENGINES[t->engine];
     const int16_t *p = t->p;
+    voice_render_ctl_t ctl;
     uint32_t i;
     int32_t lfo = mulq15(t->lfo_val, t->lfo_fade);
     /* TUNE in cents: whole 1/16 semitones in the pitch, the rest as a fine factor (no dead zone) */
@@ -701,56 +947,32 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
     esync_coef(t);                                      /* this block's envelope steps for env_tick (ENV SYNC) */
     if (e->block)                                       /* the engine's per-part work (WHEEL: bars, rotor) */
         e->block(t);
+    ctl.e = e;
+    ctl.p = p;
+    ctl.lfo = lfo;
+    ctl.tune = tune;
+    ctl.tune_fine = tune_fine;
+    ctl.bend16 = bend16;
+    ctl.bend_fine = bend_fine;
+    ctl.fade = fade;
+#if FELUCCA_RDX && FELUCCA_CPU2
+    if (e == &ENG_RDX && C1_ON() && !c1_inside_part_job && !c1_outer_active) {
+        uint32_t valid = 0;
+        AUDIO_TIME_START(t_ctl);
+        for (i = 0; i < NVOICE; i++)
+            if (voice_render_prepare(t, &t->v[i], &ctl, &rdx_c1_voice_job.mod[i])) {
+                valid |= 1u << i;
+                nr++;
+            }
+        AUDIO_TIME_ADD(rdx_ctl, t_ctl);
+        rdx_render_parallel(t, e, out, n, valid, nr);
+    } else
+#endif
     for (i = 0; i < NVOICE; i++) {
         voice_t *v = &t->v[i];
         vmod_t m;
-        int32_t env, pitch;
-        if (!v->active)
+        if (!voice_render_prepare(t, v, &ctl, &m))
             continue;
-        {
-            env = env_tick(t, v);
-            if (e->ownenv && v->active) {               /* the engine's envelopes (FM6): they end the voice */
-                if (e->done(t, v)) {
-                    v->active = v->gate = 0;
-                    v->stage = 0;
-                    v->env = v->env_out = 0;
-                    continue;
-                }
-                v->env = 1 << 24;                       /* (the ADSR's release never ends it) */
-                env = 32767;
-            }
-            if (e->amp)                                 /* the engine's own amplitude curve */
-                env = e->amp(t, v, env);
-            m.envq15 = e->ownenv ? 0 : env;
-            m.amp1 = e->ownenv ? env : mulq15(env, v->vel * 258);
-            if (p[P_LD_AMP])
-                m.amp1 = mulq15(m.amp1, 32767 - mulq15(p[P_LPOL] ? lfo : (lfo + 32768) >> 1, p[P_LD_AMP] * 258));
-            if (fade)                                   /* linear to 0 over the fade */
-                m.amp1 = m.amp1 * (int32_t)(t->xf - 1u) / (int32_t)XF_BLOCKS;
-            m.amp0 = v->env_out;
-            v->env_out = m.amp1;
-        }
-        if (v->pitch_cur != v->pitch16) {               /* glide */
-            int32_t d = v->pitch16 - v->pitch_cur;
-            int32_t st = v->gstep ? v->gstep : (int32_t)(ENV_LIN[(p[P_GLIDE] ? p[P_GLIDE] : 40) & 127] >> 14);   /* slide: ~45 ms */
-            if (st < 1)
-                st = 1;
-            v->pitch_cur += d > 0 ? (d < st ? d : st) : (-d < st ? d : -st);
-        }
-        if (!env && !m.amp0 && v->stage == 2 && !e->sampled)
-            continue;                                   /* held at a silent sustain (SUS 0): nothing to render */
-        pitch = v->pitch_cur + tune + bend16 + ((lfo * p[P_LD_PIT] * 3) >> 15) + ((m.envq15 * p[P_ED_PIT] * 3) >> 15);
-        m.pitch16 = clamp(pitch, 0, 2047);
-        m.inc = pitch_inc(m.pitch16);
-        m.fine = v->fine + tune_fine + bend_fine;
-        if (v->fine + tune_fine + bend_fine)             /* residual below 1/16 semitone */
-            m.inc += (uint32_t)((int32_t)(m.inc >> 12) * (v->fine + tune_fine + bend_fine));
-        m.cutoff = ((lfo * p[P_LD_FLT]) >> 7) + ((m.envq15 * p[P_ED_FLT]) >> 7);
-        if (v->vel > 110)                               /* accent opens the filter with the env */
-            m.cutoff += (m.envq15 * 24) >> 7;
-        m.shape = (64 << 8) + ((lfo * p[P_LD_SHP]) >> 7) + ((m.envq15 * p[P_ED_SHP]) >> 7);
-        if (MOD(t).on)                                  /* the modulation matrix (mod.c) */
-            mod_voice(t, v, &m, v->fine + tune_fine + bend_fine);
         e->render(t, v, T_SPREAD(t) > v->side ? SPREAD_BUF(t) : out, n, &m);   /* (SPREAD: the left ones) */
         nr++;
     }

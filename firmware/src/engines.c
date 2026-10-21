@@ -33,6 +33,12 @@ static uint8_t eng_mem_owner[NPART];       /* engine index + 1 whose state is in
 #include "eng_drum.c"           /* DRUM: the 8-lane kit (drum_voice.c) */
 #include "../engines/src/eng_noise.c"
 #include "eng_fm6.c"            /* FM6: 6-operator FM, msfa ported (fm6_core.c, Apache-2.0) */
+#if FELUCCA_RDX
+#include "eng_rdx.c"            /* RDX: fixed-point four-operator Reface DX, eight voices */
+#define ENG_SLOT_12 ENG_RDX
+#else
+#define ENG_SLOT_12 ENG_FM6
+#endif
 #include "fm4_convert.c"        /* DIGITAL's tables, and its sounds -> FM6 */
 #if FELUCCA_FM4
 #include "eng_digital.c"        /* DIGITAL: four-operator FM (retired; FELUCCA_FM4=1 builds it) */
@@ -43,6 +49,12 @@ static uint8_t eng_mem_owner[NPART];       /* engine index + 1 whose state is in
 
 /* the editor protocol, user presets and projects store these indices: append, never reorder */
 static const engine_t *const ENGINES[NENGINES] = {
+#if FELUCCA_FM6_ONLY
+    /* Keep Felucca's persistent engine numbers stable. Old/non-FM6 engine ids resolve safely to FM6, while
+     * eng_ok() hides them from PRESETS, EDIT and the editor protocol. */
+    &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12,
+    &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12, &ENG_SLOT_12,
+#else
     &ENG_ANALOG,                 /* 0 */
 #if FELUCCA_FM4
     &ENG_DIGITAL,                /* 1 (ENGI_DIGITAL) */
@@ -59,14 +71,18 @@ static const engine_t *const ENGINES[NENGINES] = {
     &ENG_PHYS,                   /* 9 (ENGI_PHYS) */
     &ENG_DRUM,                   /* 10 (ENGI_DRUM) */
     &ENG_NOISE,                  /* 11 */
-    &ENG_FM6,                    /* 12 (ENGI_FM6) */
+    &ENG_SLOT_12,                /* 12 (ENGI_FM6 / ENGI_RDX) */
 #if FELUCCA_SLICE
     &ENG_SLICE,                  /* 13 (FELUCCA_SLICE=0 builds without it) */
+#endif
 #endif
 };
 
 /* a track's engine number as an index (the audio paths: a compare, cheaper than % NENGINES; a bad number: 0) */
-static inline uint32_t eng_idx(uint32_t e) { return e < NENGINES ? e : 0u; }
+static inline uint32_t eng_idx(uint32_t e)
+{
+    return FELUCCA_FM6_ONLY ? ENGI_FM6 : (e < NENGINES ? e : 0u);
+}
 
 /* part t's engine memory goes to its engine (t->engine; voice.c engine_block, once a block: on a switch, after
  * the old engine's fade, before any note on the new one): zeroed (its engine_t.mem bytes) when another
@@ -112,6 +128,9 @@ static const char *snd_missing(const track_t *t, uint32_t *code)
  * engine indices, never DIGITAL's reserved 1 (with FELUCCA_FM4 it follows FM6). The indices stay as they are (the
  * stores and the protocol hold them); only this table orders them */
 static const uint8_t ENGINE_ORDER[NENG_SHOWN] = {
+#if FELUCCA_FM6_ONLY
+    ENGI_FM6,
+#else
     0,                           /* ANALOG */
     12,                          /* FM6 */
 #if FELUCCA_FM4
@@ -123,11 +142,15 @@ static const uint8_t ENGINE_ORDER[NENG_SHOWN] = {
     13,                          /* SLICE */
 #endif
     10,                          /* DRUM */
+#endif
 };
 
 /* the engines one can pick (engine 1 only with FELUCCA_FM4), in ENGINE_ORDER: eng_ok(e), the n-th of them
  * eng_vis(n), e's place among them eng_rank(e), the next / previous one eng_step(e, dir) (wraps) */
-static int eng_ok(uint32_t e) { return e < NENGINES && (FELUCCA_FM4 || e != ENGI_DIGITAL); }
+static int eng_ok(uint32_t e)
+{
+    return FELUCCA_FM6_ONLY ? e == ENGI_FM6 : e < NENGINES && (FELUCCA_FM4 || e != ENGI_DIGITAL);
+}
 static uint32_t eng_vis(uint32_t n) { return ENGINE_ORDER[n % NENG_SHOWN]; }
 static uint32_t eng_rank(uint32_t e)
 {
@@ -187,6 +210,12 @@ static const struct {
 #define NPATTERNS (sizeof PATTERNS / sizeof PATTERNS[0])
 
 /* the parts at power-on (engine, preset, PATTERNS[n - 1] in the sequencer, 0 = empty: all are): bass, pad, lead, drums */
+#if FELUCCA_FM6_ONLY
+static const uint8_t TRK_DEF[NPART][3] = {
+    {ENGI_FM6, 0, 0}, {ENGI_FM6, 4, 0}, {ENGI_FM6, 3, 0}, {ENGI_FM6, 2, 0}
+}; /* TINE EP, PAD, BRASS, FM BASS */
+#else
 static const uint8_t TRK_DEF[NPART][3] = {{0, 4, 0}, {ENGI_FM6, 4, 0}, {3, 0, 0}, {ENGI_DRUM, 0, 0}}; /* ANALOG ACID,
                                                                        * FM6 PAD (was DIGITAL PAD), LOFI PULSE LD, DRUM KIT */
+#endif
 static uint32_t trk_def_engine(uint32_t i) { return TRK_DEF[i % NPART][0]; }

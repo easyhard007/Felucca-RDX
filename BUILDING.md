@@ -78,6 +78,8 @@ Build options (environment, `0` or `1`; defaults in `firmware/src/felucca.c`, `c
 | `FELUCCA_SLICE` | 1 | the SLICE engine |
 | `FELUCCA_ICONS` | 1 | parameter icons on the knob cards |
 | `FELUCCA_FM4` | 0 | the retired DIGITAL engine (4-operator FM) instead of its FM6 conversion |
+| `FELUCCA_FM6_ONLY` | 0 | expose only FM6 and its factory presets (keeps FM6's stored engine id 12) |
+| `FELUCCA_RDX` | 0 | replace persistent engine slot 12 with the fixed-point, 4-voice RDX engine; implies `FELUCCA_FM6_ONLY=1` |
 
 `FELUCCA_USB_LAYOUT` (`0` to `3`, default `0`) picks other USB descriptor layouts for testing; see
 `firmware/src/usb.c`.

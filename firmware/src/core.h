@@ -24,14 +24,31 @@
 #define FELUCCA_CPU2 1           /* the second core (src/felucca.c): 1 = built in, MENU > 2ND CORE ON lets it render
                                   * some parts; 0 = none of it */
 #endif
+#ifndef FELUCCA_FM6_ONLY
+#define FELUCCA_FM6_ONLY 0       /* src/felucca.c: FM6-only RDX migration baseline */
+#endif
+#ifndef FELUCCA_RDX
+#define FELUCCA_RDX 0            /* fixed-point, eight-voice Reface DX engine in persistent slot 12 */
+#endif
+#if FELUCCA_RDX
+#undef FELUCCA_FM6_ONLY
+#define FELUCCA_FM6_ONLY 1       /* RDX is the only visible engine in this migration build */
+#endif
+#if FELUCCA_FM6_ONLY
+#undef FELUCCA_SLICE
+#define FELUCCA_SLICE 0          /* a single-engine build cannot expose SLICE */
+#undef FELUCCA_FM4
+#define FELUCCA_FM4 0            /* nor the retired four-operator DIGITAL engine */
+#endif
 #define C1_NP (FELUCCA_CPU2 ? NPART : 1)   /* the copies of the state a part's render writes that parts shared before the
                                             * second core (mod.c, voice.c SPREAD, eng_formant.c): one each with two cores,
                                             * one for all with one, as up to 1.6 */
 #define C1_PI(t) ((uint32_t)((t) - trk) % C1_NP)   /* a part's copy */
 #define NENGINES (13 + FELUCCA_SLICE)   /* SLICE (13) comes last: the other engines keep their numbers */
 #define ENGI_DIGITAL 1u          /* reserved without FELUCCA_FM4: never selectable (eng_ok), its sounds load as FM6 */
-#define NENG_SHOWN (NENGINES - !FELUCCA_FM4)   /* the engines one can pick: PRESETS, the EDIT layer, the editor,
-                                                * in the display order of engines.c ENGINE_ORDER */
+#define ENGI_FM6 12u
+#define ENGI_RDX ENGI_FM6        /* keep projects/settings compatible while the engine is replaced */
+#define NENG_SHOWN (FELUCCA_FM6_ONLY ? 1 : NENGINES - !FELUCCA_FM4) /* engines one can pick: PRESETS, EDIT, editor */
 #define UP_SLOTS 32u             /* user presets (upreset.c) */
 
 /* ------------------------------------------------------- parameters --- */
@@ -341,7 +358,8 @@ typedef struct {
     uint8_t sel;                 /* selected track 0..NTRK-1: keys, pages, editor */
     int8_t octave;
     uint32_t tick;               /* sub-blocks since play */
-    uint32_t cpu_q8;             /* audio ISR load, 1/256 */
+    uint32_t cpu_q8;             /* core 0 audio work excluding core 1 wait, 1/256 */
+    uint32_t cpu1_q8;            /* core 1 part-render time, 1/256 (0 in a one-core build) */
     uint32_t master_q12;
     int32_t batt_raw;            /* smoothed ADC ch3 (battery divider), 0 = not read yet */
     uint8_t mch[NTRK];           /* 1.5.5 (#202): MIDI IN TRACK (G_ROUTE ROUTE_TRACK), each track's channel as stored: 0..15

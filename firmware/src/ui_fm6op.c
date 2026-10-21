@@ -30,7 +30,7 @@ static const uint8_t FO_PAGE[3][4] = {
 static const uint8_t FO_OFF[10] = {0, 0, FP_FC, FP_FF, FP_OL, FP_MODE, FP_DET, FP_KVS, FP_R1, FP_L1};
 
 static int fop_page(uint32_t g) { return g >= GR_FMOP && g <= GR_FMENV; }
-static int fop_ok(void) { return TSEL->eng_req % NENGINES == ENGI_FM6; }
+static int fop_ok(void) { return !FELUCCA_RDX && TSEL->eng_req % NENGINES == ENGI_FM6; }
 static uint32_t fop_field(uint32_t slot)
 {
     uint32_t g = cur_page()->graph;

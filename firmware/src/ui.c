@@ -430,7 +430,7 @@ static int page_visible(uint32_t i)
     if (PAGES[i].id[0] == P_FTYPE)                    /* FILTER (1.5, #104): ANALOG's */
         return ENGINES[TSEL->eng_req % NENGINES] == &ENG_ANALOG;
     if (PAGES[i].graph >= GR_FMOP && PAGES[i].graph <= GR_FMENV)
-        return TSEL->eng_req % NENGINES == ENGI_FM6;
+        return !FELUCCA_RDX && TSEL->eng_req % NENGINES == ENGI_FM6;
 #if FELUCCA_SLICE
     if (PAGES[i].graph == GR_SLICES)
         return ENGINES[TSEL->eng_req % NENGINES] == &ENG_SLICE;
@@ -1138,6 +1138,7 @@ static void undo_swap(void)
     fm1_irq_on();
     if (undo.what & UNDO_SOUND) {                 /* FM6: the track's patch as it was (edited, a project's, a
                                                    * converted DIGITAL sound), not a factory one */
+#if !FELUCCA_RDX
         uint32_t tr = trk_index(t);
         uint8_t v[FP_SIZE + 1u], sl = fm6_slot[tr];
         memcpy(v, fm6_patch[tr], FP_SIZE);
@@ -1146,6 +1147,9 @@ static void undo_swap(void)
         fm6_own_ok &= (uint8_t)~(1u << tr);
         memcpy(undo.fm6, v, FP_SIZE);
         undo.fm6_slot = sl;
+#else
+        rdx_track_restored(t);                    /* the generic VOICE copy must not override the RDX patch */
+#endif
     }
     undo.keep = 0;                                /* the next load copies the track as it is now */
     if (t == TSEL)
@@ -1377,6 +1381,9 @@ static void apply_preset_to(track_t *t, uint32_t pi)
             t->p[P_DIST + i] = (int16_t)(pr->fx[i] ? pr->fx[i] - 1 : FX_DEF[i]);
     }
     fm6_track_loaded(t);                              /* FM6: the preset's patch (its SLOT) */
+#if FELUCCA_RDX
+    rdx_track_loaded(t);                              /* RDX: factory patch, voice mode and portamento owner */
+#endif
     load_end(t);
 }
 
@@ -1441,7 +1448,7 @@ static void clean_engine_of(track_t *t)
         t->p[P_REL] = CLEAN_REL;
     }
     fm1_irq_on();
-    if (ei == ENGI_FM6) {                             /* the init voice as the track's own patch (SLOT: OWN) */
+    if (!FELUCCA_RDX && ei == ENGI_FM6) {             /* the init voice as the track's own patch (SLOT: OWN) */
         uint8_t v[FP_SIZE + 1u];
         fm6_unpack(FM6_INIT, v);
         fm6_set_patch(trk_index(t), v);
@@ -1470,7 +1477,7 @@ static void midi_pc_load(track_t *t, uint32_t n)
     }
     if (n >= preset_shown(e)) {
         int32_t s = (int32_t)(FM6_OWN + 1u + n - preset_shown(e));
-        if (e == ENGI_FM6 && fm6_bank_slot(s) >= 0 && fm6_slot_ok(s))
+        if (!FELUCCA_RDX && e == ENGI_FM6 && fm6_bank_slot(s) >= 0 && fm6_slot_ok(s))
             t->p[P_E7] = (int16_t)s;
         return;
     }

@@ -1551,6 +1551,42 @@ static void style_apply(void)
     }
 }
 
+/* Diagnostic for the RDX polyphony investigation.  audio.c increments audio_late_notice only
+ * when the DMA changes half while that half is still being rendered.  Keep all drawing out of
+ * the audio ISR: this UI-side poll shows the missed audio deadline for 1.5 seconds. */
+static void draw_audio_late_notice(void)
+{
+    static uint32_t seen, until;
+    static uint8_t shown, source_seen;
+    uint32_t n = audio_late_notice;
+    char count[16] = "COUNT ";
+    char source[20] = "SOURCE ";
+    uint16_t bg;
+    if (n != seen) {
+        seen = n;
+        source_seen = audio_late_source;
+        until = fm1_ms + 1500u;
+        shown = 1;
+    }
+    if (!shown)
+        return;
+    if ((int32_t)(until - fm1_ms) <= 0) {
+        shown = 0;
+        ui.force = 1;                                  /* restore the page covered by the overlay */
+        return;
+    }
+    fmt_int(count + 6, (int32_t)n);
+    str_cpy(source + 7, source_seen == (AUDIO_LATE_C0 | AUDIO_LATE_C1) ? "BOTH" :
+            source_seen == AUDIO_LATE_C0 ? "CORE0" : source_seen == AUDIO_LATE_C1 ? "CORE1" : "SYNC", 13);
+    bg = ((fm1_ms / 120u) & 1u) ? T_REC : T_ACCENT;
+    cv_begin(224, 86, T_BG);
+    cv_rrect(0, 0, 224, 86, -8, bg, T_BG);
+    cv_text_in(0, 5, 224, &AF_S, source, T_INK, bg);
+    cv_text_in(0, 24, 224, &AF_L, "AUDIO LATE", T_INK, bg);
+    cv_text_in(0, 65, 224, &AF_S, count, T_INK, bg);
+    cv_blit(8, 77);
+}
+
 static void ui_draw_page(uint32_t counting);
 static void ui_draw(void)
 {
@@ -1564,6 +1600,7 @@ static void ui_draw(void)
     if (!scr_frame())                                   /* MENU > SCREEN OFF: dark (or waking), nothing drawn */
         return;
     ui_draw_page(counting);
+    draw_audio_late_notice();                           /* last: visible over HOME, menus and dialogs */
     scr_shown();
 }
 static void ui_draw_page(uint32_t counting)

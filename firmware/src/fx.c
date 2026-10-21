@@ -69,6 +69,8 @@ _Static_assert(sizeof rev_comb / 2u >= SP_LEN && sizeof rev_u.sp / 4u >= 4u * (S
 #define HL_KD(d) (32767 - (d) * 180)     /* its coefficient (Q15) for DAMP d: none at 0 .. ~1 kHz at 127 */
 #define HL_LOUD 32                       /* a line this loud (two samples' sum) rounds its gain to the nearest */
 #define HL_OUT 4                         /* the outputs' gain: the level of ROOM's tail */
+#define HL_TONE 27600                    /* two return low-passes, about 6.5 kHz each at HALL's 22.05 kHz rate:
+                                          * removes its broad 8..10 kHz fixed-point / half-rate noise floor */
 static const uint16_t HL_LEN[HL_NL] = {467, 509, 547, 593, 631, 673, 709, 743};   /* (+1 each: the mirror) */
 static const uint16_t HL_AP[HL_NAP] = {131, 307};
 static const int16_t HL_APG[HL_NAP] = {11469, 10240};               /* Q14: 0.7, 0.625 */
@@ -80,6 +82,8 @@ static struct {                          /* HALL's state (in the pool: no .bss) 
     int32_t lp[HL_NL], le[HL_NL];        /* the low-passes and their steps' remainders */
     int32_t x, m, s, hp, he;             /* the send's last sample, its low cut and that step's remainder; the
                                           * last mid and side out (half rate) */
+    int32_t ml1, ml2, sl1, sl2;           /* two-pole tone filters on the HALL mid and side returns */
+    int32_t me1, me2, se1, se2;           /* their division remainders: no low-level limit cycle */
     int16_t g[HL_NL], sz;                /* the lines' gains / sqrt(7) (Q14), for SIZE sz - 1 (0: none yet) */
     uint32_t ph;                         /* the taps' drift */
     uint8_t side;                        /* sd holds this block's stereo difference (HALL running) */
@@ -318,6 +322,15 @@ static __attribute__((noinline)) void rev_spring(const int32_t *rev_in, int32_t 
 /* HALL's helpers: m / 2^sh rounded towards zero (a product that feeds back must not floor: a loop of floors
  * holds an offset and a little noise for ever) */
 static inline int32_t sh_tz(int32_t m, uint32_t sh) { return (m + ((m >> 31) & ((1 << sh) - 1))) >> sh; }
+/* HALL's return can be four lines x HL_OUT, wider than the ordinary Q15 paths.  Keep this product wide: the
+ * generic 32-bit mulq15 would overflow here and turn the low-pass into loud noise. */
+static inline int32_t hall_tone(int32_t state, int32_t input, int32_t *rem)
+{
+    int64_t e = (int64_t)(input - state) * HL_TONE + *rem;
+    int32_t step = (int32_t)(e >> 15);
+    *rem = (int32_t)(e - (int64_t)step * 32768);
+    return state + step;
+}
 /* 2^-x, x Q16 (0 .. 16): Q15 (32768 at x = 0). 2^-x = 2^u / 2^(i + 1), u = 1 - frac(x); 2^u by a cubic (1e-4) */
 static uint32_t exp2_neg(uint32_t x)
 {
@@ -406,6 +419,8 @@ static __attribute__((noinline)) void rev_hall(const int32_t *rev_in, int32_t *o
     uint32_t i, k, s, m, d;
     int32_t kd = HL_KD(song.g[G_RDAMP]);
     int32_t xp = hl.x, hp = hl.hp, he = hl.he, mp = hl.m, sp = hl.s;
+    int32_t ml1 = hl.ml1, ml2 = hl.ml2, sl1 = hl.sl1, sl2 = hl.sl2;
+    int32_t me1 = hl.me1, me2 = hl.me2, se1 = hl.se1, se2 = hl.se2;
     (void)n;
     if (hl.sz != song.g[G_RSIZE] + 1)
         hall_gains(song.g[G_RSIZE]);
@@ -475,8 +490,15 @@ static __attribute__((noinline)) void rev_hall(const int32_t *rev_in, int32_t *o
         hl.i[k] = (uint16_t)d;
         b += HL_LEN[k] + 1u;
     }
-    for (i = 0; i < HL_NC; i++) {                       /* back to 44.1 kHz, between samples */
-        int32_t mm = (hl.l[i] + hl.r[i]) * HL_OUT, ss = (hl.l[i] - hl.r[i]) * HL_OUT;
+    for (i = 0; i < HL_NC; i++) {                       /* tone, then back to 44.1 kHz between samples */
+        int32_t rawm = (hl.l[i] + hl.r[i]) * HL_OUT, raws = (hl.l[i] - hl.r[i]) * HL_OUT;
+        int32_t mm, ss;
+        ml1 = hall_tone(ml1, rawm, &me1);
+        ml2 = hall_tone(ml2, ml1, &me2);
+        sl1 = hall_tone(sl1, raws, &se1);
+        sl2 = hall_tone(sl2, sl1, &se2);
+        mm = ml2;
+        ss = sl2;
         out[2u * i] += (mp + mm) >> 1;
         out[2u * i + 1u] += mm;
         rev_side[2u * i] = (sp + ss) >> 1;
@@ -485,6 +507,8 @@ static __attribute__((noinline)) void rev_hall(const int32_t *rev_in, int32_t *o
         sp = ss;
     }
     hl.m = mp, hl.s = sp;
+    hl.ml1 = ml1, hl.ml2 = ml2, hl.sl1 = sl1, hl.sl2 = sl2;
+    hl.me1 = me1, hl.me2 = me2, hl.se1 = se1, hl.se2 = se2;
     hl.side = 1;
 }
 
@@ -502,6 +526,8 @@ static void rev_clear(void)
         hl.lp[i] = hl.le[i] = 0;
     fx.sp_lp = fx.sp_hp = fx.sp_he = 0;
     hl.x = hl.m = hl.s = hl.hp = hl.he = 0;
+    hl.ml1 = hl.ml2 = hl.sl1 = hl.sl2 = 0;
+    hl.me1 = hl.me2 = hl.se1 = hl.se2 = 0;
 }
 
 #if FELUCCA_CPU2
@@ -865,7 +891,7 @@ static __attribute__((noinline)) void mix_spread(track_t *t, int32_t *b, uint32_
 #if FELUCCA_CPU2
 static uint16_t part_cost[NTRK];                        /* the last block's, per part */
 static const uint16_t ENG_VCOST[NENGINES] = {163, FELUCCA_FM4 ? 181 : 0, 162, 67, 70, 174, 144, 143, 189, 309, 113, 134,
-                                             181,
+                                             FELUCCA_RDX ? 260 : 181,
 #if FELUCCA_SLICE
                                              129
 #endif
@@ -939,6 +965,92 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
         mod_end(t);                                     /* the stored values back */
 }
 
+#if FELUCCA_RDX
+/* Cost of the selected RDX part over one complete I2S half (HALF_FRAMES samples).  mix_part is called once per
+ * CTL-sized block, possibly on core 1; accumulating its four calls makes the number directly comparable with the
+ * 2.9 ms DMA deadline.  Silent halves do not enter the average.  The average is a 32-half IIR (~93 ms at 44.1 kHz),
+ * and changing the preset or an RDX edit parameter starts a new measurement. */
+#if defined(FM1_TICKS_PER_US)
+#define RDX_PERF_TIMER 1
+#else
+#define RDX_PERF_TIMER 0                               /* host/browser: no hardware TIMER4 around fx.c */
+#endif
+static struct {
+    volatile uint32_t half_ticks, avg_q8;
+    volatile uint16_t peak_us;
+    volatile uint8_t voices, valid;
+    volatile uint8_t half_voices, half_seen;
+    uint8_t part;
+    uint32_t sig;
+} rdx_perf;
+
+static uint32_t rdx_perf_sig(const track_t *t)
+{
+    uint32_t i, h = (uint32_t)t->preset + 2166136261u + (uint32_t)(t - trk) * 131u;
+    for (i = 0; i < 8u; i++)
+        h = (h ^ (uint16_t)t->p[P_E0 + i]) * 16777619u;
+    return h;
+}
+
+static void rdx_perf_half_begin(void)
+{
+    track_t *t;
+    uint32_t sig;
+    rdx_perf.part = song.sel < NTRK ? song.sel : 0u;
+    rdx_perf.half_ticks = 0;
+    rdx_perf.half_voices = 0;
+    rdx_perf.half_seen = 0;
+    t = &trk[rdx_perf.part];
+    sig = rdx_perf_sig(t);
+    if (sig != rdx_perf.sig) {
+        rdx_perf.sig = sig;
+        rdx_perf.avg_q8 = 0;
+        rdx_perf.peak_us = 0;
+        rdx_perf.valid = 0;
+    }
+}
+
+static void rdx_perf_half_end(void)
+{
+    rdx_perf.voices = rdx_perf.half_voices;
+#if RDX_PERF_TIMER
+    if (rdx_perf.half_seen && rdx_perf.half_voices) {
+        uint32_t us = (rdx_perf.half_ticks + FM1_TICKS_PER_US / 2u) / FM1_TICKS_PER_US;
+        uint32_t q8 = us << 8;
+        if (!rdx_perf.valid) {
+            rdx_perf.avg_q8 = q8;
+            rdx_perf.valid = 1;
+        } else
+            rdx_perf.avg_q8 = (rdx_perf.avg_q8 * 31u + q8 + 16u) >> 5;
+        if (us > rdx_perf.peak_us)
+            rdx_perf.peak_us = (uint16_t)(us > 65535u ? 65535u : us);
+    }
+#endif
+}
+
+static void rdx_mix_part(track_t *t, uint32_t n SM_DECL)
+{
+    uint32_t timed = t == &trk[rdx_perf.part] && t->engine == ENGI_RDX;
+#if RDX_PERF_TIMER
+    uint32_t t0 = timed ? fm1_ticks() : 0u;
+#endif
+    mix_part(t, n SM_ARG(sm));
+    if (timed) {
+        uint32_t i, voices = 0;
+#if RDX_PERF_TIMER
+        rdx_perf.half_ticks += fm1_ticks() - t0;
+#endif
+        for (i = 0; i < NVOICE; i++)
+            voices += t->v[i].active != 0u;
+        if (voices > rdx_perf.half_voices)
+            rdx_perf.half_voices = (uint8_t)voices;
+        rdx_perf.half_seen = 1;
+    }
+}
+#else
+#define rdx_mix_part mix_part
+#endif
+
 /* the HOME oscilloscope (ui_graph.c graph_scope): every other sample of the left channel. MENU > DISPLAY > SCOPE (1.2,
  * Discussion #165): OUT (0, the default) what goes out, after MASTER (audio.c audio_block, before the click); MIX the
  * mix before MASTER (and before the FX layer, SPEAKER EQ and the limiter), at the level MASTER at its top gives, so its
@@ -991,17 +1103,24 @@ static __attribute__((noinline)) void perf_master(int32_t *out, uint32_t n)
 #ifndef C1_SPLIT
 #define C1_SPLIT() mix_split()
 #endif
+#ifndef C1_TICKS
+#define C1_TICKS() fm1_ticks()
+#endif
 static uint32_t c1_blocks;                              /* blocks the second core took parts of (console) */
 
 static void c1_parts(uint32_t arg)                      /* arg: the parts (bit k = part k) | n << 8 */
 {
     uint32_t i, n = arg >> 8;
+    uint32_t t0 = C1_TICKS();
     mixsum_t *sm = &mx[1];
     for (i = 0; i < n; i++)
         sm->l[i] = sm->r[i] = sm->c[i] = sm->d[i] = sm->v[i] = 0;
+    c1_inside_part_job = 1;
     for (i = 0; i < NPART; i++)
         if (arg >> i & 1u)
-            mix_part(&trk[i], n, sm);
+            rdx_mix_part(&trk[i], n, sm);
+    c1_inside_part_job = 0;
+    c1_half_ticks += C1_TICKS() - t0;
 }
 
 /* which parts go to the second core: the split of the last block's costs that leaves the busier core the least; none
@@ -1010,6 +1129,17 @@ static void c1_parts(uint32_t arg)                      /* arg: the parts (bit k
 static uint32_t mix_split(void)
 {
     uint32_t m, i, best = 0, all = 0, lo;
+#if FELUCCA_RDX
+    /* An active RDX Part performs its own voice-level dual-core split inside
+     * track_render.  Do not occupy Core1 with an outer whole-Part job first. */
+    for (i = 0; i < NPART; i++)
+        if (trk[i].engine == ENGI_RDX) {
+            uint32_t v;
+            for (v = 0; v < NVOICE; v++)
+                if (trk[i].v[v].active)
+                    return 0;
+        }
+#endif
     for (i = 0; i < NPART; i++)
         all += part_cost[i];
     lo = all;
@@ -1033,22 +1163,30 @@ static void mix_block(int32_t *out, uint32_t n)
     uint32_t i;
     int perf;
     int32_t mg = fx_usb_fixed ? MASTER_FULL : (int32_t)song.master_q12;   /* (USB LEVEL FIXED: MASTER after) */
+    AUDIO_TIME_START(t_mix_pre);
     for (i = 0; i < n; i++)
         send_c[i] = send_d[i] = send_r[i] = mix_l[i] = mix_r[i] = 0;
     events_block(n);
     perf = perf_begin(n);                               /* the FX hold layer at work (perform.c) */
+    AUDIO_TIME_ADD(pre, t_mix_pre);
 #if FELUCCA_CPU2
     uint32_t m = C1_ON() ? C1_SPLIT() & ((1u << NPART) - 1u) : 0u;
-    if (m && !C1_RUN(c1_parts, m | n << 8))
-        m = 0;
+    if (m) {
+        c1_outer_active = 1;
+        if (!C1_RUN(c1_parts, m | n << 8)) {
+            c1_outer_active = 0;
+            m = 0;
+        }
+    }
     c1_blocks += m != 0;
     for (i = 0; i < NPART; i++)
         if (!(m >> i & 1u))
-            mix_part(&trk[i], n, &mx[0]);
+            rdx_mix_part(&trk[i], n, &mx[0]);
     if (m) {
         const mixsum_t *sm = &mx[1];
         if (C1_WAIT())                                  /* it stopped answering (held from now on): its parts here */
             c1_parts(m | n << 8);
+        c1_outer_active = 0;
         for (i = 0; i < n; i++) {
             mix_l[i] += sm->l[i];
             mix_r[i] += sm->r[i];
@@ -1061,8 +1199,9 @@ static void mix_block(int32_t *out, uint32_t n)
         track_lfo_end(&trk[i]);
 #else
     for (i = 0; i < NPART; i++)                         /* (one core: as 1.6) */
-        mix_part(&trk[i], n);
+        rdx_mix_part(&trk[i], n);
 #endif
+    AUDIO_TIME_START(t_post_fx);
     if (perf)
         perf_pre(mix_l, mix_r, send_d, send_r, n);
     fx_buses(send_c, send_d, send_r, wet, n);
@@ -1072,6 +1211,7 @@ static void mix_block(int32_t *out, uint32_t n)
         scope_take_mix(n);
     if (perf) {
         perf_master(out, n);
+        AUDIO_TIME_ADD(post_fx, t_post_fx);
         return;
     }
     for (i = 0; i < n; i++) {
@@ -1081,4 +1221,5 @@ static void mix_block(int32_t *out, uint32_t n)
         out[2u * i] = l;
         out[2u * i + 1u] = r;
     }
+    AUDIO_TIME_ADD(post_fx, t_post_fx);
 }

@@ -1054,6 +1054,9 @@ static int project_restore_runtime(const project_t *input)
 {
     project_t *p = &proj_scratch;
     uint32_t i, k;
+#if FELUCCA_FM6_ONLY
+    uint32_t fm6_convert = 0;
+#endif
     if (!proj_ok(input) || !proj_engines_ok(input)) return 1;
     mom_back(0);                                  /* (ui_input.c MOMENTARY: the values as they were, then the load) */
     memset(drum_mute, 0, sizeof drum_mute);       /* (1.4.1: the DRUM lanes' mutes, performance state) */
@@ -1082,6 +1085,12 @@ static int project_restore_runtime(const project_t *input)
         track_t *t = &trk[k];
         const proj_trk_t *s = &p->t[k];
         uint32_t e = s->engine;                         /* (< NENGINES: proj_engines_ok) */
+#if FELUCCA_FM6_ONLY
+        if (e != ENGI_FM6) {
+            e = ENGI_FM6;
+            fm6_convert |= 1u << k;
+        }
+#endif
         t->eng_req = (uint8_t)e;
         t->user = 0;                                    /* (no user preset slot is saved) */
         for (i = 0; i < P_COUNT; i++) {                 /* every value back inside its range (param_fit) */
@@ -1091,15 +1100,24 @@ static int project_restore_runtime(const project_t *input)
         t->preset = (uint8_t)(ENGINES[e]->npresets ? (s->preset >= PROJ_DEF_KEEP ? 0u : s->preset) % ENGINES[e]->npresets : 0u);
         memcpy(t->step, s->step, sizeof t->step);
         proj_steps(t->step);
+#if !FELUCCA_RDX
         {   /* the project's own FM6 patch, never reloaded from SLOT: F n if it is that factory patch, else OWN */
             uint8_t v[FP_SIZE + 1u];
             fm6_unpack(p->fm6[k], v);
             fm6_set_patch(k, v);
             fm6_adopt(k);
         }
+#endif
     }
     song.sel = (uint8_t)(p->sel < NTRK ? p->sel : 0u);
     fm1_irq_on();
+#if FELUCCA_FM6_ONLY
+    /* A project made by full Felucca has no useful FM6 patch for a non-FM6 track.  Give that
+     * track a complete factory FM6 sound now that its persistent engine id has been migrated. */
+    for (k = 0; k < NTRK; k++)
+        if ((fm6_convert >> k) & 1u)
+            apply_preset_to(&trk[k], p->t[k].preset % FM6_NFACTORY);
+#endif
     proj_name_get(proj_name, (const uint8_t *)p->name);
     proj_cur = PROJ_NO_SLOT;                            /* (project_load: its slot) */
     pat_from_set(0);                                    /* (project_load: its slot; the header's letter) */
@@ -1120,6 +1138,9 @@ static int project_restore_runtime(const project_t *input)
                 t->p[i] = TP[i].def;
             fm1_irq_on();
         }
+#if FELUCCA_RDX
+        rdx_track_restored(t);                          /* autosaves keep P_E7, then derive patch-owned VOICE */
+#endif
         pat_sig[k] = ~steps_sig(t);                     /* a project's steps are the user's */
     }
     undo_depth--;

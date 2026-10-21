@@ -158,11 +158,17 @@ static void fm1_main(void)
     uint8_t c1_told = 0;                                /* 2ND CORE MISREAD shown (and ON cleared) */
 #endif
     persist_boot();
+#if FELUCCA_FM6_ONLY
+    fm6_only_settings_boot();
+#endif
 #if FELUCCA_OTA
     if (flash_ok)
         ota_boot_cleanup();                             /* staging area left by an update */
 #endif
     settings_init();
+#if FELUCCA_CPU2 && FELUCCA_RDX
+    ui_prefs2 |= (uint8_t)(PREF_CPU2_ON >> 16);          /* the RDX dual-core build always starts core 1 */
+#endif
     usb_serial_apply();                                 /* (#67: the saved USB SERIAL before usb_start) */
     lcd_init();
     draw_splash();                                      /* ui_draw.c (1.1.5) */
@@ -186,7 +192,7 @@ static void fm1_main(void)
     master_boot();
     kb_boot_hold = 1;                         /* #137: no notes from the keys before the UI (seq.c keyboard_block) */
 #if FELUCCA_CPU2
-    if (!bootguard.failed && (ui_prefs2 & (PREF_CPU2_ON >> 16))) {
+    if (FELUCCA_RDX || (!bootguard.failed && (ui_prefs2 & (PREF_CPU2_ON >> 16)))) {
         /* the second core (hal/fm1_cpu1.h; fx.c mix_block hands it parts), at power-on, before the audio and
          * the timers (started later it never reaches its entry). It starts in the chip's ROM: the PC limits open
          * meanwhile. MENU > 2ND CORE OFF (the default), a crash in the last boot's first 30 s, or no answer: it is
@@ -210,7 +216,13 @@ static void fm1_main(void)
         panel_setup();                        /* OCT- + OCT+ held at power-on */
         settings_save();
     }
+#if FELUCCA_FM6_ONLY
+    if (fm6_only_migrate)
+        settings_save();                      /* remember that the incompatible session was discarded once */
+    autosave_boot(boot_clean && !fm6_only_migrate);
+#else
     autosave_boot(boot_clean);                /* (1.2) the last session's music, under the splash */
+#endif
     for (ms = 0; ms < 400u; ms += 10u) {      /* the splash; the pot followed (MIDI IN plays under it) */
         fm1_delay_ms(10);
         master_poll();
@@ -230,7 +242,7 @@ static void fm1_main(void)
 #if FELUCCA_CPU2
         if (*(volatile uint8_t *)&fm1_c1_gave_up && !c1_told) {   /* (the ISR's) */
             c1_told = 1;                                /* (once: ON set again afterwards stays, for the next power-on) */
-            if (ui_prefs2 & (PREF_CPU2_ON >> 16)) {
+            if (!FELUCCA_RDX && (ui_prefs2 & (PREF_CPU2_ON >> 16))) {
                 ui_prefs2 &= (uint8_t)~(PREF_CPU2_ON >> 16);   /* core 1 misread or stopped answering on this FM-1: one
                                                          * core from now on (MENU > 2ND CORE ON tries again) */
                 settings_later();
@@ -274,6 +286,9 @@ static void fm1_main(void)
             }
         }
 #if FELUCCA_OTA
+#if FELUCCA_RDX
+        rdx_sysex_service();                            /* Yamaha reface DX SysEx */
+#endif
         ed_service();                                   /* web editor SysEx */
         ota_service();                                  /* M-UPGRADE handshake */
         if (usb.ota_req) {                              /* M-UPGRADE upgrade command */
@@ -314,6 +329,9 @@ static void fm1_main(void)
         while (fm1_ms - m < 15u) {                               /* ~60 UI frames/s at most */
             ui_input();
 #if FELUCCA_OTA
+#if FELUCCA_RDX
+            rdx_sysex_service();                /* leave non-RDX frames for the editor */
+#endif
             ed_service();                       /* editor replies without waiting for the next frame */
 #endif
         }

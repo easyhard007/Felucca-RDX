@@ -42,6 +42,11 @@ static const char *const N_QUANT[] = {"OFF", "SNAP", "WHITE", "SEQ", "SEQ+T"};
 static const char *const N_CHRD[] = {"OFF", "DIA3", "DIA7", "MAJ", "MIN", "DOM7", "MAJ7", "MIN7", "SUS4", "POW"};
 static const char *const N_VOIC[] = {"CLOSE", "OPEN", "INV1", "INV2", "+OCT"};   /* VC_CLOSE .. VC_BASS */
 static const char *const N_VOICE[] = {"POLY", "MONO", "LEG", "UNI"};   /* V_POLY .. V_UNISON */
+#if FELUCCA_RDX
+static const char *const N_RDX_VOICE[] = {"POLY", "M-FULL", "M-LEG"};
+static const param_desc_t RDX_VOICE_DESC = {"VCE", F_ENUM, 0, 2, 0, N_RDX_VOICE, 0};
+static const param_desc_t RDX_PORTA_DESC = {"PORTA", F_INT, 0, 127, 0, 0, 0};
+#endif
 static const char *const N_GLMODE[] = {"RATE", "TIME"};
 static const char *const N_PRIO[] = {"LAST", "LOW", "HIGH"};
 static const char *const N_ALLOC[] = {"ROT", "REUSE"};
@@ -224,6 +229,12 @@ static const param_desc_t GP[G_COUNT] = {
 
 static const param_desc_t *track_desc(const track_t *t, uint32_t id)
 {
+#if FELUCCA_RDX
+    if (id == P_VOICE && eng_idx(t->eng_req) == ENGI_RDX)
+        return &RDX_VOICE_DESC;
+    if (id == P_GLIDE && eng_idx(t->eng_req) == ENGI_RDX)
+        return &RDX_PORTA_DESC;
+#endif
     if (id >= P_E0 && id <= P_E7) {                   /* the engine asked for (t->engine follows after a fade) */
         const engine_t *e = ENGINES[eng_idx(t->eng_req)];
         const param_desc_t *d = e->desc ? e->desc(t, id - P_E0) : 0;   /* a mode-dependent label / names */
@@ -504,6 +515,14 @@ static uint8_t mod_ui_slot;      /* the MOD page: the matrix slot (0..3) KNOB 2.
 static const param_desc_t *page_desc(const page_t *pg, uint32_t slot, int16_t **valp)
 {
     uint32_t id = pg->id[slot];
+#if FELUCCA_RDX
+    /* Reface VOICE has Part Mode and Portamento Time.  Felucca's GLMODE and
+     * note-priority controls do not exist on the instrument. */
+    if (eng_idx(TSEL->eng_req) == ENGI_RDX && pg->id[0] == P_VOICE && slot >= 2u) {
+        *valp = 0;
+        return 0;
+    }
+#endif
     if (id == 0xFFu) {
         *valp = 0;
         return 0;

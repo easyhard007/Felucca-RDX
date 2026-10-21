@@ -190,7 +190,7 @@ static void midi_silence_track(uint32_t track)
     t->seq_n = t->seq_hold = t->slide_glide = 0;
     for (i = 0; i < NVOICE; i++)
         if (t->v[i].active)
-            voice_kill(&t->v[i]);             /* one-block fade, regardless of RELEASE */
+            voice_kill(t, &t->v[i]);          /* engine tail when supplied, else a one-block fade */
     sl[track].rec = sl[track].loop = 0;       /* do not keep replaying captured sound */
     midi_forget_track(track);
 }

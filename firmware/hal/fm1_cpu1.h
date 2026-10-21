@@ -53,7 +53,9 @@ volatile uint32_t fm1_c1_trace;                 /* breadcrumbs (fm1_cpu1.S, fm1_
 static uint8_t fm1_c1_on;                       /* started and answering: core 0 may hand it work */
 #define FM1_C1_CHECK(fn, arg, job) ((uint32_t)(uintptr_t)(fn) ^ (arg) ^ (job) * 0x9E3779B1u)
 static uint8_t fm1_c1_gave_up;                  /* 1 = it read a wrong job, 2 = it did not finish one */
+static uint8_t fm1_c1_failed_half;               /* the current audio half saw either Core1 failure */
 static uint32_t fm1_c1_wait_max;                /* the longest wait for a job, TIMER4 ticks (24 / us) */
+static uint32_t fm1_c1_wait_ticks_half;         /* Core0 synchronization wait in the current audio half */
 static uint8_t fm1_c1_marked;                   /* its stack was marked (fm1_cpu1_start): fm1_cpu1_stack_used 0 before */
 
 void fm1_c1_main(void);
@@ -170,19 +172,25 @@ static inline int fm1_cpu1_wait(void)
     for (;;) {
         FM1_C1_SYNC();
         if (fm1_c1_mb.bad) {                    /* a unit that cannot run it: one core */
+            fm1_c1_wait_ticks_half += FM1_C1_T4 - t0;
             fm1_cpu1_hold();
             fm1_c1_gave_up = 1;
+            fm1_c1_failed_half = 1;
             return -1;
         }
         if (fm1_c1_mb.done == fm1_c1_mb.job) {
-            if (FM1_C1_T4 - t0 > fm1_c1_wait_max)
-                fm1_c1_wait_max = FM1_C1_T4 - t0;
+            uint32_t waited = FM1_C1_T4 - t0;
+            fm1_c1_wait_ticks_half += waited;
+            if (waited > fm1_c1_wait_max)
+                fm1_c1_wait_max = waited;
             return 0;
         }
-        if (FM1_C1_T4 - t0 > 24000u * 4u) {     /* 4 ms (as Jangada): past any block's work, a half is 2.9 ms
-                                                 * (it faulted, or stalled): one glitch, then one core */
+        if (FM1_C1_T4 - t0 > 24000u * 8u) {     /* 8 ms: tolerate a short RDX overload before falling back;
+                                                 * a half is 2.9 ms, so this can miss audio before recovery */
+            fm1_c1_wait_ticks_half += FM1_C1_T4 - t0;
             fm1_cpu1_hold();
             fm1_c1_gave_up = 2;
+            fm1_c1_failed_half = 1;
             return -1;
         }
     }

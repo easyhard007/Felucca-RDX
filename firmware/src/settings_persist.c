@@ -27,6 +27,29 @@ typedef struct {
 } persist_t;
 #define PERSIST_MAGIC 0x50455234u
 
+#if FELUCCA_FM6_ONLY
+/* The regular firmware keeps the PRESETS list mode and the last session in flash.  The first
+ * FM6-only build used those records unchanged, so an FM-1 that had FAV selected could appear
+ * to have only a few FM6 sounds, and an autosaved non-FM6 track could drive ENG_FM6 without
+ * ever loading an FM6 patch.  Byte 13 is otherwise unused.  On the first boot of this fixed
+ * build, select ALL and skip the incompatible autosave once; later FM6-only sessions restore
+ * normally. */
+#define FM6_ONLY_SETTINGS_TAG 0xF6u
+static uint8_t fm6_only_migrate;
+static uint8_t fm6_only_settings_seen;
+
+static void fm6_only_settings_boot(void)
+{
+    /* A device with no settings record is already clean.  Give its first future settings
+     * record the tag without treating the first ordinary save as an upgrade. */
+    if (!fm6_only_settings_seen) {
+        favorites.filter = 0;
+        favorites.factory[15][11] = 0;
+        favorites.factory[15][13] = FM6_ONLY_SETTINGS_TAG;
+    }
+}
+#endif
+
 /* Normalize in place; 1 = current, 2 = migrated, 0 = invalid. */
 static int settings_import(persist_t *p, int n)
 {
@@ -35,6 +58,9 @@ static int settings_import(persist_t *p, int n)
     int old2 = n == (int)(sizeof *p - sizeof p->favorites - sizeof p->bold) && p->magic == 0x50455232u;
     int old1 = n == (int)(8u + sizeof(panel_t)) && p->magic == 0x50455231u;
     if (!(current || old3 || old2 || old1)) return 0;
+#if FELUCCA_FM6_ONLY
+    fm6_only_settings_seen = 1;
+#endif
     if (old1) {
         panel_t old;
         memcpy(&old, (uint8_t *)p + 8, sizeof old);
@@ -43,6 +69,11 @@ static int settings_import(persist_t *p, int n)
     }
     if (old1 || old2) p->bold = 0;
     if (!current) memset(&p->favorites, 0, sizeof p->favorites);
+#if FELUCCA_FM6_ONLY
+    if (p->favorites.factory[15][13] != FM6_ONLY_SETTINGS_TAG) {
+        fm6_only_migrate = 1;
+    }
+#endif
     if (p->favorites.factory[15][29] > 1u)        /* STYLE (ui.c ui_style): 2, the retired PIXEL = LINE; unknown = FLAT */
         p->favorites.factory[15][29] = p->favorites.factory[15][29] == 2u ? 1u : 0u;
     {   /* CLICK, CLICK LEVEL, COUNT-IN (ui.c ui_rec_prefs): two bits each, 3 is no value: the default (0) */
@@ -77,6 +108,15 @@ static int settings_import(persist_t *p, int n)
 #ifdef FELUCCA_FAVORITES
     memcpy(&favorites, &p->favorites, sizeof favorites);
     favorites.filter = favorites.filter == 1u;
+#if FELUCCA_FM6_ONLY
+    if (fm6_only_migrate) {
+        /* Change the live copy, not p: persist_saved remains the old record, so settings_save
+         * below main.c's boot path detects this migration and really commits the marker. */
+        favorites.filter = 0;                 /* PRESETS > LIST: ALL */
+        favorites.factory[15][11] = 0;        /* no category filter */
+        favorites.factory[15][13] = FM6_ONLY_SETTINGS_TAG;
+    }
+#endif
 #if defined(FM4_NPRESETS) && !FELUCCA_FM4
     {   /* DIGITAL's starred presets (engine 1, retired) -> the FM6 presets that cover them (fm4_convert.c) */
         uint32_t k;

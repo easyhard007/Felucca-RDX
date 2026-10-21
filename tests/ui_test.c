@@ -141,6 +141,10 @@ static void lcd_blit(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint1
         for (i = 0; i < w && x + i < 240u; i++) host_put((y + j) * 240u + x + i, p[j * w + i]);
 }
 static struct { uint32_t stage; } felucca_dbg;
+static volatile uint32_t audio_max_us;
+static volatile uint32_t audio_late_notice;
+enum { AUDIO_LATE_C0 = 1u, AUDIO_LATE_C1 = 2u, AUDIO_LATE_SYNC = 4u };
+static volatile uint8_t audio_late_source;
 #define FELUCCA_FLASH 0
 #ifndef FELUCCA_VERSION
 #define FELUCCA_VERSION "TEST"
