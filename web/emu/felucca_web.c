@@ -30,7 +30,8 @@
 #define FELUCCA_UART 0
 #ifndef FELUCCA_VERSION
 #if FELUCCA_RDX
-#define FELUCCA_VERSION "RDX 0.5"
+#include "rdx_version.h"
+#define FELUCCA_VERSION "RDX " RDX_VERSION
 #else
 #define FELUCCA_VERSION "WEB"
 #endif
@@ -497,6 +498,18 @@ EXPORT uint8_t *web_anim_levels(void)
  * steps, held; T4 DRUM, kick snare and hats. PLAY is the page's (or the test's) to press */
 EXPORT void web_test_heavy(void)
 {
+#if FELUCCA_RDX
+    uint32_t i;
+    track_t *t = &trk[0];
+    host_preset(t, ENGI_RDX, 0);
+    t->p[P_VOICE] = V_POLY;
+    t->p[P_SUS] = 127;
+    for (i = 0; i < 16u; i++) {
+        static const uint8_t CH[4][4] = {{48, 55, 60, 64}, {45, 52, 57, 60},
+                                         {41, 48, 53, 57}, {43, 50, 55, 59}};
+        put_step(t, i, 4, CH[i / 4u], ST_NOTE, 0);
+    }
+#else
     static const uint8_t ENG[3][2] = {{12, 4}, {ENGI_PHYS, 7}, {8, 0}};
     static const uint8_t CH[4][4] = {{48, 55, 60, 64}, {45, 52, 57, 60}, {41, 48, 53, 57}, {43, 50, 55, 59}};
     uint32_t p, i;
@@ -523,11 +536,13 @@ EXPORT void web_test_heavy(void)
         n[k++] = i % 2u ? 42 : 46;
         put_step(&trk[3], i, k, n, ST_NOTE, 0);
     }
+#endif
     ui.force = 1;
 }
 
 EXPORT uint32_t web_test_user_preset(uint32_t i) { return (uint32_t)up_used(i); }
 #if FELUCCA_FM6_ONLY
+EXPORT uint32_t web_test_track_count(void) { return NTRK; }
 EXPORT uint32_t web_test_preset_total(void) { uint32_t n; (void)preset_pos(&n); return n; }
 #if FELUCCA_RDX
 EXPORT void web_test_rdx_preset(uint32_t p)

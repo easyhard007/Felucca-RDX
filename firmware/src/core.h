@@ -1,15 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
-/* FELUCCA core types: tracks, voices, engines, parameters.
- * Four tracks, each a synth part: its own engine, preset, parameters, voices and 64-step
- * pattern. The parts share one budget of NVOICE sounding voices (voice.c). Drums are the DRUM
- * engine (General MIDI map) on any part; the SAMPLE engine's PERC set is retired (drum_from_perc).
- * Sections: sizes, parameters, voices and engines, tracks and the song, system. */
+/* FELUCCA core types: tracks, voices, engines, parameters. */
 #include <stdint.h>
 
 /* ------------------------------------------------------------ sizes --- */
 #define NVOICE 8                 /* voices per part, and the budget shared by all parts */
-#define NPART 4                  /* synth parts: tracks 1..4 */
+#if FELUCCA_RDX
+#define NPART 1                  /* RDX is a monotimbral instrument: one sound, one part */
+#else
+#define NPART 4                  /* upstream Felucca groovebox: tracks 1..4 */
+#endif
 #define NTRK NPART               /* tracks (the formats and the protocol count these): every track is a part */
 #define NSTEP 64
 #define HALF_FRAMES 128          /* I2S half buffer: 2.9 ms at 44.1 kHz (a key waits 0..1 half, then plays 1 half later) */
@@ -261,7 +261,8 @@ typedef struct {
     uint8_t count, rsv[3];
     chain_row_v9_t row[CHAIN_ROWS];
 } chain_v9_t;
-_Static_assert(sizeof(chain_config_t) == 84u && sizeof(chain_v9_t) == 36u, "song chain layouts (FUN10 / FUN6..FUN9)");
+_Static_assert(sizeof(chain_config_t) == (FELUCCA_RDX ? 36u : 84u) && sizeof(chain_v9_t) == 36u,
+               "song chain layouts (RDX single track / Felucca four track)");
 
 typedef struct track {
     int16_t p[P_COUNT];
@@ -379,7 +380,7 @@ typedef struct {
 #define MCH_OFF 17u
 #define MCH_N 18u                    /* channels 1..16, OMNI, OFF */
 
-static track_t trk[NTRK];        /* the instrument: four parts */
+static track_t trk[NTRK];        /* RDX: one monotimbral part; upstream Felucca: four parts */
 static song_t song;
 #define TSEL (&trk[song.sel])    /* the selected track */
 /* MIDI IN TRACK: track i's channel 0..15, MCH_OMNI or MCH_OFF (song.mch), and set */

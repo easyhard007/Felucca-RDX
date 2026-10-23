@@ -7,9 +7,12 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 默认配置：RDX、8 复音、双核、128-frame 音频缓冲
+- 当前版本：Felucca RDX 0.6.1
+- 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
+
+版本号只在 `firmware\src\rdx_version.h` 中维护。每次向真机交付一份新固件时递增最后一段版本号，例如 `0.6.1 -> 0.6.2 -> ... -> 0.6.10`。启动画面、模拟器和安装器会读取同一版本。
 
 ## 编译固件
 
@@ -64,6 +67,8 @@ cd E:\Projects\fm1\RDX
 写入期间保持设备供电，不要拔出 USB 线或关闭页面。若要恢复官方固件，可使用 Felucca 官方安装器的 `Return to official V15`。
 
 ## 音色与效果
+
+RDX 固件只有一个运行时轨道。ALGORITHM 旋钮不再切换轨道，MIDI 菜单只显示一个 `MIDI CHANNEL`，四轨 Mixer、T2–T4 和自动选轨入口均不再出现在 RDX 界面中。底层保留的旧工程读取代码只用于兼容历史文件，导入时仅接收第一条乐器轨道。
 
 首页以“音色集 - 音色名”显示当前声音。内置音色集为：
 

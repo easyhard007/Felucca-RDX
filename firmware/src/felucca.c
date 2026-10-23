@@ -47,7 +47,8 @@
                                       * waiting loop is in RAM the ROM and the SPL use at boot) */
 #ifndef FELUCCA_VERSION
 #if FELUCCA_RDX
-#define FELUCCA_VERSION "RDX 0.5" /* splash: "Felucca" / "RDX 0.5"; menu, console and editor too */
+#include "rdx_version.h"
+#define FELUCCA_VERSION "RDX " RDX_VERSION /* splash, menu, console and editor */
 #else
 #define FELUCCA_VERSION "v1.6.1"  /* shown in the menu, the console and the editor; build.py --release X.Y */
 #endif

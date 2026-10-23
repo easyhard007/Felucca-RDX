@@ -6,6 +6,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
+$versionLine = Get-Content -LiteralPath (Join-Path $root "firmware\src\rdx_version.h") |
+    Where-Object { $_ -match '^#define RDX_VERSION "([0-9]+\.[0-9]+\.[0-9]+)"$' } |
+    Select-Object -First 1
+if (-not $versionLine) { throw "Cannot read RDX_VERSION from firmware\src\rdx_version.h" }
+$version = [regex]::Match($versionLine, '"([^"]+)"').Groups[1].Value
 $toolchainRoot = Join-Path $root ".toolchains\jieli"
 $sdkRoot = Join-Path $root ".toolchains\fw-AC79_AIoT_SDK"
 $toolchain = Get-ChildItem -LiteralPath $toolchainRoot -Directory -Filter "jieli-linux-toolchains-*" |
@@ -42,7 +47,7 @@ $emuRoot = Join-Path $root "build\emu"
 $fontRoot = Join-Path $emuRoot "fonts"
 New-Item -ItemType Directory -Force -Path $fontRoot | Out-Null
 $html = Get-Content -Raw -LiteralPath (Join-Path $root "web\emu\index.html")
-$html = $html.Replace("@VERSION@", "Felucca RDX 0.5").Replace("@PREVIEW@", "")
+$html = $html.Replace("@VERSION@", "Felucca RDX $version").Replace("@PREVIEW@", "")
 Set-Content -NoNewline -Encoding utf8 -LiteralPath (Join-Path $emuRoot "index.html") -Value $html
 Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\worklet.js") -Destination $emuRoot
 Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\fonts\DotGothic16-subset.woff") -Destination $fontRoot
@@ -52,7 +57,7 @@ Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\fonts\OFL.txt") -Destina
 if ($LASTEXITCODE -ne 0) { throw "RDX emulator regression failed" }
 
 $siteRoot = Join-Path $root "build\site"
-& python (Join-Path $root "web\make_site.py") (Join-Path $root "build\felucca.fwsc") "rdx-0.5" $siteRoot
+& python (Join-Path $root "web\make_site.py") (Join-Path $root "build\felucca.fwsc") "rdx-$version" $siteRoot
 if ($LASTEXITCODE -ne 0) { throw "Local web installer generation failed" }
 
 Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root "build\felucca.bin"), (Join-Path $root "build\felucca.fwsc") |

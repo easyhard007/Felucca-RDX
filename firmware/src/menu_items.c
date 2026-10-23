@@ -19,7 +19,11 @@ enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_H
 #if FELUCCA_RDX
        MI_PHSMODEL, MI_FLGMODEL,
 #endif
-       MI_MIDIIN, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_MFOLLOW, MI_SCRWAKE, MI_LCLEAR, MI_SERIAL, MI_RESTORE, MI_HELP,
+       MI_MIDIIN, MI_TCH1,
+#if !FELUCCA_RDX
+       MI_TCH2, MI_TCH3, MI_TCH4, MI_MFOLLOW,
+#endif
+       MI_SCRWAKE, MI_LCLEAR, MI_SERIAL, MI_RESTORE, MI_HELP,
 #if FELUCCA_CPU2
        MI_CPU2,                                        /* (not in a FELUCCA_CPU2=0 build: core.h) */
 #endif
@@ -44,17 +48,27 @@ enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_H
 #define MI_TEXT(row) 0
 #endif
 static int menu_valued(uint32_t row) { return row < MI_VALUES && row != MI_LCLEAR; }   /* (a row with a value) */
-#define MI_PROJECT(row) ((row) == MI_TUNE || ((row) >= MI_MIDIIN && (row) <= MI_TCH4))   /* the project's values (song.g,
+#if FELUCCA_RDX
+#define MI_TCH_LAST MI_TCH1
+#else
+#define MI_TCH_LAST MI_TCH4
+#endif
+#define MI_PROJECT(row) ((row) == MI_TUNE || ((row) >= MI_MIDIIN && (row) <= MI_TCH_LAST))   /* the project's values (song.g,
                                                                                          * song.mch), not settings */
-#define MI_TCH(row) ((row) >= MI_TCH1 && (row) <= MI_TCH4)   /* 1.5.5 (#202): T1..T4 CHANNEL, MIDI IN TRACK's */
+#define MI_TCH(row) ((row) >= MI_TCH1 && (row) <= MI_TCH_LAST)
 static const char *const MI_NAME[MI_COUNT] = {"COLOR", "STYLE", "LARGE", "ANIM", "LEDS", "SCREEN OFF", "SCOPE", "HOME", "HOLD", "KNOB ACCEL",
                                               "FX LATCH", "BPM LOCK", "SCALE LEDS", "STEP PREVIEW", "CHORD ENTRY", "SELECT",
                                               "SPEAKER EQ", "USB LEVEL", "CLICK", "CLICK LEVEL", "COUNT-IN", "TUNE",
 #if FELUCCA_RDX
                                               "PHS MODEL", "FLG MODEL",
 #endif
-                                              "MIDI IN", "T1 CHANNEL", "T2 CHANNEL", "T3 CHANNEL", "T4 CHANNEL",
-                                              "AUTO SELECT", "SCREEN WAKE", "LEARN CLEAR", "USB SERIAL", "RESTORE LAST", "HELP",
+                                              "MIDI IN",
+#if FELUCCA_RDX
+                                              "MIDI CHANNEL",
+#else
+                                              "T1 CHANNEL", "T2 CHANNEL", "T3 CHANNEL", "T4 CHANNEL", "AUTO SELECT",
+#endif
+                                              "SCREEN WAKE", "LEARN CLEAR", "USB SERIAL", "RESTORE LAST", "HELP",
 #if FELUCCA_CPU2
                                               "2ND CORE",
 #endif
@@ -88,8 +102,11 @@ static const uint8_t MI_TAB[MI_COUNT] = {
     MTAB_AUDIO, MTAB_AUDIO,                                                  /* PicoFace/Felucca phaser and flanger A/B */
 #endif
     MTAB_MIDI,                                                              /* MIDI IN (1.2) */
-    MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI,                             /* T1..T4 CHANNEL (1.5.5) */
+    MTAB_MIDI,                                                              /* MIDI channel / T1 channel */
+#if !FELUCCA_RDX
+    MTAB_MIDI, MTAB_MIDI, MTAB_MIDI,                                        /* T2..T4 CHANNEL */
     MTAB_MIDI,                                                              /* AUTO SELECT (1.5.5) */
+#endif
     MTAB_MIDI,                                                              /* SCREEN WAKE (1.5.5: DISPLAY is full) */
     MTAB_MIDI,                                                              /* LEARN CLEAR (1.5) */
     MTAB_SYSTEM, MTAB_SYSTEM, MTAB_SYSTEM,                                  /* USB SERIAL, RESTORE LAST, HELP (1.5) */
@@ -141,7 +158,9 @@ static const menu_flag_t MENU_FLAGS[] = {
     {MI_PREVIEW, PREF_PREVIEW, {"OFF", "ON"}},         /* 1.2, Discussion #169: ON, the cursor's step sounds (ui_input.c) */
     {MI_CHADD, PREF_CHORD_ADD, {"HOLD", "ADD"}},       /* 1.2, #155: ADD, keys add to the cursor step (ui_input.c) */
     {MI_HELP, PREF_HELP, {"OFF", "ON"}},               /* 1.5, Discussion #156: ON, a hint per page / layer (ui_help.c) */
+#if !FELUCCA_RDX
     {MI_MFOLLOW, PREF_MIDI_FOLLOW, {"OFF", "ON"}},     /* 1.5.5, #208: ON, MIDI IN notes select their track (ui_input.c) */
+#endif
     {MI_SCRWAKE, PREF_WAKE_PANEL, {"+MIDI", "PANEL"}}, /* 1.5.5: PANEL, only the panel wakes SCREEN OFF (ui.c scr_input) */
 #if FELUCCA_CPU2
     {MI_CPU2, PREF_CPU2_ON, {"OFF", "ON (BETA)"}},     /* 1.6.1: ON, the second core (main.c, from the next power-on) */
@@ -165,7 +184,11 @@ static const char *const SCROFF_N[5] = {"NEVER", "5 MIN", "15 MIN", "30 MIN", "6
 static const char *const ANIM_N[3] = {"ON", "OFF", "IDLE"};
 static const uint8_t ANIM_ORD[3] = {1, 0, 2};          /* (a value's place in the menu's order, and back: its own inverse) */
 /* 1.3 (Discussions #112, #134): what HOME shows under its cards (ui.c ui_home_view): the scope, or the four tracks */
+#if FELUCCA_RDX
+static const char *const HOME_N[HV_COUNT] = {"SCOPE"};
+#else
 static const char *const HOME_N[HV_COUNT] = {"SCOPE", "TRACKS", "LEVELS"};   /* (1.5, #134: LEVELS) */
+#endif
 
 /* MENU > USB SERIAL (#67). The serial console is a developer tool (README: FELUCCA_CDC). ON (the default) presents it,
  * the descriptors byte for byte as before; OFF re-enumerates as audio + MIDI only, device class 0 (the bytes of a
@@ -243,7 +266,11 @@ static uint32_t menu_get(uint32_t row)
     case MI_CLICK: case MI_CLKLVL: case MI_COUNTIN: return rp_get(row - MI_CLICK);
     case MI_TUNE: return (uint32_t)(clamp(song.g[G_TUNE], TUNE_MIN, TUNE_MIN + (int32_t)TUNE_N - 1) - TUNE_MIN);
     case MI_MIDIIN: return (uint32_t)clamp(song.g[G_ROUTE], 0, (int32_t)NELEM(N_ROUTE) - 1);
-    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: return mch_get(row - MI_TCH1);
+    case MI_TCH1:
+#if !FELUCCA_RDX
+    case MI_TCH2: case MI_TCH3: case MI_TCH4:
+#endif
+        return mch_get(row - MI_TCH1);
     case MI_LEDS:
         while (i + 1u < LEDS_COUNT && LEDS_MENU[i] != settings_leds)
             i++;
@@ -276,7 +303,11 @@ static const char *menu_vname(uint32_t row, uint32_t v)
 #endif
     case MI_LEDS: return LEDS_ROW_N[v % LEDS_ROWS];
     case MI_MIDIIN: return N_ROUTE[v % NELEM(N_ROUTE)];
-    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: {   /* "1".."16", OMNI, OFF */
+    case MI_TCH1:
+#if !FELUCCA_RDX
+    case MI_TCH2: case MI_TCH3: case MI_TCH4:
+#endif
+    {   /* "1".."16", OMNI, OFF */
         static char b[4];
         if (v >= 16u)
             return v == MCH_OMNI ? "OMNI" : "OFF";
@@ -360,7 +391,11 @@ static void menu_put(uint32_t row, uint32_t v)
     case MI_CLICK: case MI_CLKLVL: case MI_COUNTIN: rp_put(row - MI_CLICK, v); break;   /* (at once: click.c, seq.c) */
     case MI_TUNE: song.g[G_TUNE] = (int16_t)((int32_t)v + TUNE_MIN); break;
     case MI_MIDIIN: song.g[G_ROUTE] = (int16_t)v; break;
-    case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4:   /* (MIDI IN TRACK: what the channel no longer hears let */
+    case MI_TCH1:
+#if !FELUCCA_RDX
+    case MI_TCH2: case MI_TCH3: case MI_TCH4:
+#endif
+        /* MIDI IN TRACK: what the channel no longer hears let */
         mch_set(row - MI_TCH1, v);                     /* go, seq.c events_block) */
         midi_route = MIDI_ROUTE_AGAIN;
         break;

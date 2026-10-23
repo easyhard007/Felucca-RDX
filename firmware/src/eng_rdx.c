@@ -80,7 +80,7 @@ static volatile uint8_t rdx_track_sel[NTRK];
 static uint8_t rdx_track_slot[NTRK], rdx_track_custom, rdx_track_valid;
 /* Touch Wah has no touch strip on FM-1.  SELECT is its manual centre control;
  * the audio envelope still supplies the touch-sensitive part of the sweep. */
-static volatile uint8_t rdx_touch_wah_pos[NTRK] = {64, 64, 64, 64};
+static volatile uint8_t rdx_touch_wah_pos[NTRK] = {64};
 static const rdx_patch_t *rdx_track_get(uint32_t tr);
 /* MENU > SYSTEM > RDX TYPE.  Kept outside the settings byte because the
  * engine is compiled before ui.c in Felucca's single translation unit. */

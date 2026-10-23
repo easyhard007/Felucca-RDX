@@ -212,7 +212,11 @@ static const struct {
 /* the parts at power-on (engine, preset, PATTERNS[n - 1] in the sequencer, 0 = empty: all are): bass, pad, lead, drums */
 #if FELUCCA_FM6_ONLY
 static const uint8_t TRK_DEF[NPART][3] = {
+#if FELUCCA_RDX
+    {ENGI_RDX, 0, 0}
+#else
     {ENGI_FM6, 0, 0}, {ENGI_FM6, 4, 0}, {ENGI_FM6, 3, 0}, {ENGI_FM6, 2, 0}
+#endif
 }; /* TINE EP, PAD, BRASS, FM BASS */
 #else
 static const uint8_t TRK_DEF[NPART][3] = {{0, 4, 0}, {ENGI_FM6, 4, 0}, {3, 0, 0}, {ENGI_DRUM, 0, 0}}; /* ANALOG ACID,

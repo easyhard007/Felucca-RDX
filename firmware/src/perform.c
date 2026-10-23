@@ -146,7 +146,13 @@ static struct {
     int32_t fw, pw;                    /* their shares, Q15 */
     uint32_t fwp, fn;                  /* FLANGER: the frame written next; frames written since it started */
     int32_t px[2][PH_ST], py[2][PH_ST], pfb[2];   /* PHASER: each stage's last input and output, L and R; the fed back */
-} pf = {.src = PF_N, .next = PF_N, .lc = PF_TOP, .mg = {32768, 32768, 32768, 32768}};
+} pf = {.src = PF_N, .next = PF_N, .lc = PF_TOP,
+#if FELUCCA_RDX
+        .mg = {32768}
+#else
+        .mg = {32768, 32768, 32768, 32768}
+#endif
+};
 
 static int16_t fl_buf[FL_LEN][2];      /* FLANGER's line: L R, at half the level (headroom) */
 

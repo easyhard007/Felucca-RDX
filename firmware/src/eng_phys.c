@@ -103,8 +103,11 @@ static phys_slot_t *phys_slot_of(track_t *t, voice_t *v)
 
 /* a clean state for model md */
 #if FELUCCA_CPU2
-_Static_assert(NTRK == 4, "phys_nz: a seed per part");
+#if FELUCCA_RDX
+static int32_t phys_nz[NTRK] = {0x6A09E667};
+#else
 static int32_t phys_nz[NTRK] = {0x6A09E667, 0x6A09E667, 0x6A09E667, 0x6A09E667};   /* phys_render's reset seeds */
+#endif
 #define PHYS_RSEED(t) noise32(&phys_nz[(uint32_t)((t) - trk) % NTRK])   /* the part's own (not rng(), shared) */
 #else
 #define PHYS_RSEED(t) rng()                             /* (one core: as up to 1.6) */

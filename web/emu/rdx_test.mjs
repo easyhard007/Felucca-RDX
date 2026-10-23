@@ -48,6 +48,7 @@ const held = await boot();
 const effected = await boot();
 const fxab = await boot();
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
+check("RDX firmware has one runtime track", d.ex.web_test_track_count() === 1);
 check("32 Factory and 21 Selected RDX voices are visible", d.ex.web_test_preset_total() === 53);
 check("RDX TYPE defaults to the optimized renderer", d.ex.web_test_rdx_type() === 1);
 d.ex.web_test_rdx_type_set(0);
@@ -111,7 +112,7 @@ for (let i = 0; i < 24; i++) {
   if (!c) break;
   firmwareVersion += String.fromCharCode(c);
 }
-check("RDX firmware identifies itself as Felucca RDX 0.5", firmwareVersion === "RDX 0.5");
+check("RDX firmware identifies itself as Felucca RDX 0.6.1", firmwareVersion === "RDX 0.6.1");
 check("sound-set registry contains Factory and Selected",
       d.ex.web_test_rdx_set_count() === 2 &&
       cstr(d.ex.web_test_rdx_set_name_byte, 0) === "Factory" &&

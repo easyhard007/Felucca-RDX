@@ -32,9 +32,11 @@ static const uint8_t ED_MENU[][2] = {
     {MI_HOME, 23},                                     /* 1.3 (Discussions #112, #134): HOME SCOPE / TRACKS, DISPLAY */
     {MI_HELP, 24},                                     /* 1.5 (Discussion #156): HELP OFF / ON, SYSTEM */
     {MI_SELECT, 25},                                   /* 1.5.5 (Discussion #188): SELECT BPM / PAGE, CONTROL */
-    {MI_TCH1, 26}, {MI_TCH2, 27}, {MI_TCH3, 28}, {MI_TCH4, 29},   /* 1.5.5 (#202): T1..T4 CHANNEL, the project's (song.mch)
-                                                       * as MIDI IN: 1..16 OMNI OFF (values 0..17), MIDI */
-    {MI_MFOLLOW, 30},                                  /* 1.5.5 (#208): AUTO SELECT OFF / ON, a setting, MIDI */
+    {MI_TCH1, 26},
+#if !FELUCCA_RDX
+    {MI_TCH2, 27}, {MI_TCH3, 28}, {MI_TCH4, 29},       /* T1..T4 CHANNEL: 1..16 OMNI OFF */
+    {MI_MFOLLOW, 30},                                  /* AUTO SELECT OFF / ON */
+#endif
     {MI_SCRWAKE, 31},                                  /* 1.5.5: SCREEN WAKE +MIDI / PANEL, a setting, MIDI */
 #if FELUCCA_CPU2
     {MI_CPU2, 32},                                     /* 1.6.1, the second core (Discussion #141): 2ND CORE OFF / ON (BETA),

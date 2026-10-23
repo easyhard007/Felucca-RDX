@@ -110,6 +110,7 @@
 #define PROJ_NP_V4 69u                         /* P_COUNT of format 4 (P_E0 61) */
 #define PROJ_PHYS 2u                           /* project_t.phys: PHYS without DUST and DRUM (see the top) */
 #define PROJ_NAME_LEN 12u                      /* the name: FUN7 bytes PROJ_NAME_OFF.. (the reserved tail's end) */
+#define PROJ_LEGACY_NTRK 4u                    /* frozen Felucca FUN2..FUN9 disk layouts */
 typedef struct {                               /* one track */
     int16_t p[P_COUNT];
     uint8_t engine, preset;
@@ -138,11 +139,11 @@ typedef struct {                               /* format 5, before the song chai
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel, parts, phys, rsv;
-    proj_trk_v5_t t[NTRK];
+    proj_trk_v5_t t[PROJ_LEGACY_NTRK];
     uint32_t sum;
 } project_v5_t;
 typedef struct { uint32_t magic, size; int16_t g[G_COUNT]; uint8_t sel, parts, phys, rsv;
-    proj_trk_v5_t t[NTRK]; chain_v9_t chain; uint32_t sum; } project_v6_t;
+    proj_trk_v5_t t[PROJ_LEGACY_NTRK]; chain_v9_t chain; uint32_t sum; } project_v6_t;
 _Static_assert(sizeof(project_v5_t) == 3352u && sizeof(project_v6_t) == 3388u, "frozen formats 5 / 6 sizes");
 /* Serialized FUN7 keeps the retained cache's exact extent. Params are biased
  * bytes, steps pack n/time/flags. Reserved tail is zero and covered by hash.
@@ -177,7 +178,7 @@ typedef struct {                               /* format 4 (1.0 development buil
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel, parts, phys, rsv;
-    proj_trk_v4_t t[NTRK];
+    proj_trk_v4_t t[PROJ_LEGACY_NTRK];
     uint32_t sum;
 } project_v4_t;
 typedef struct {                               /* a track of format 3, read only */
@@ -189,7 +190,7 @@ typedef struct {                               /* format 3 (0.9 .. 1.0), read on
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel, parts, rsv[2];
-    proj_trk_v3_t t[NTRK];
+    proj_trk_v3_t t[PROJ_LEGACY_NTRK];
     uint32_t sum;
 } project_v3_t;
 #define PROJ_DEF_SOUND 0xFFu                   /* preset byte: the track's power-on sound, no steps (format 1) */
@@ -203,7 +204,7 @@ typedef struct {                               /* format 2 (until 0.9), read onl
     uint32_t magic, size;
     int16_t g[PROJ_NG_V2];
     uint8_t sel, rsv[3];
-    proj_trk_v2_t t[NTRK];
+    proj_trk_v2_t t[PROJ_LEGACY_NTRK];
     uint32_t sum;
 } project_v2_t;
 typedef struct {                               /* format 1 (until 0.5 beta), read only */
@@ -283,6 +284,12 @@ static void proj_trk_from_v2(proj_trk_t *d, const proj_trk_v2_t *s)
  * project_load gives it DRUM's kit (PROJ_DEF_KEEP; the SAMPLE PERC sound until 1.0.2). Idempotent */
 static void proj_drums_to_part(project_t *q)
 {
+#if FELUCCA_RDX
+    /* RDX imports only the first instrument. A legacy Felucca drum lane must
+     * never replace that sound merely because its stored part count was 4. */
+    q->parts = NPART;
+    q->sum = proj_sum(q);
+#else
     proj_trk_t *d = &q->t[NTRK - 1u];
     if (q->parts == NPART)
         return;
@@ -292,6 +299,7 @@ static void proj_drums_to_part(project_t *q)
     d->p[P_REV] = (int16_t)clamp(q->g[G_DRREV], 0, 127);
     q->parts = NPART;
     q->sum = proj_sum(q);
+#endif
 }
 
 /* PHYS tracks of a project written before PROJ_PHYS (see the top) -> today's: DUST as MODAL bowed, MODEL
