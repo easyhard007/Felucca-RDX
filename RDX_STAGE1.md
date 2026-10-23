@@ -23,7 +23,7 @@ RDX 的输出保持 Felucca 的 Q15 音频尺度，经过 `VOICE_FS` 和 `vmod_t
 ## 已实现内容
 
 - 150 字节 Reface DX patch 布局：38 字节 common、4 × 28 字节 operator。
-- 参考工程的 35 个 RDX 工厂音色。
+- 32 个可见 Factory 音色和从 Yamaha SysEx 导入的 21 个 Selected 音色；3 个旧音色仅保留为不可浏览的编号兼容槽位。
 - 12 种四算子算法。
 - 每个算子的启用、ratio/fixed 频率模式、fine、detune、输出电平和两种反馈形态。
 - 四 rate / 四 level 包络、键盘 rate scaling 和力度灵敏度。
@@ -51,7 +51,7 @@ RDX 的输出保持 Felucca 的 Q15 音频尺度，经过 `VOICE_FS` 和 `vmod_t
 
 ## 当前边界
 
-完整四算子图形编辑器仍未实现。SysEx 导入的 150 字节音色会成为当前 track 的 RAM 音色，可立即演奏并可由 Reface DX dump request 读回；重新选择 factory preset 或重启会离开这个临时音色。Felucca 的项目和用户 preset 目前仍保存 factory patch 编号及 8 个宏，不会把任意 SysEx 音色的 150 字节嵌入项目。
+完整四算子图形编辑器仍未实现。SysEx 导入的 150 字节音色会成为当前 track 的 RAM 音色，可立即演奏并可由 Reface DX dump request 读回；重新选择内置 preset 或重启会离开这个临时音色。Felucca 的项目和用户 preset 目前仍保存内置 patch 编号及 8 个宏，不会把任意临时 SysEx 音色的 150 字节嵌入项目。
 
 Pitch EG、LFO 和 portamento 在每个 32-sample 控制块计算端点，块内对算子相位增量做线性插值。相位转换使用 1/16 半音节点的定点查表；没有 `pow()`、浮点或 64 位除法。极短的 PEG stage crossing 会在最多 32 个采样内被线性化，这是当前定点实时实现与 CoreS3 分段浮点版本之间的主要精度差异。
 
@@ -90,9 +90,9 @@ RDX 构建默认生成强制启动第二核的固件：
 - `build\emu`：浏览器模拟器。
 - `build\site\webapp\installer`：本地网页安装器。
 
-`web/emu/rdx_test.mjs` 会演奏全部 35 个 factory patch，检查每个 patch 都有有效输出、松键边界连续，检查第九个同时按下的音符不会让活动声部超过 8，并检查松键后声部最终释放。它还验证 Pitch EG、RDX LFO、keyboard level scaling、mono portamento、SysEx checksum、bulk import 和七段完整 dump。
+`web/emu/rdx_test.mjs` 会演奏全部 53 个可见 patch，检查 Factory/Selected 音色集成员、每个 patch 的有效输出和松键边界连续性，检查第九个同时按下的音符不会让活动声部超过 8，并检查松键后声部最终释放。它还验证 Pitch EG、RDX LFO、keyboard level scaling、mono portamento、SysEx checksum、bulk import 和七段完整 dump。
 
-要重新从 CoreS3 参考工程导入 factory patch 和查表数据，可运行：
+要重新从 CoreS3 参考工程导入 Factory、从 `assets/rdx/selected` 导入 Selected，并生成查表数据，可运行：
 
 ```powershell
 python tools\gen_rdx_data.py E:\Projects\CoreS3\reface_cp_assistant\components\rdx_reface firmware\src\felucca_rdx_data.h

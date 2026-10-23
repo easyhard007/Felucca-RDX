@@ -348,6 +348,11 @@ typedef struct track {
  * new track parameters (the INSERT, the filter TYPE, ENV SYNC) and state would make it no multiple (the constant
  * loaded first: +3 % on the ISR's static cost, target_budget.py): one pad, rsv_sz, keeps it */
 _Static_assert(sizeof(track_t) % 16u == 0, "track_t: a multiple of 16 bytes (a cheap trk[] index on the target)");
+#if FELUCCA_RDX
+/* Q8.8 velocity prepared immediately before an engine note_on callback. RDX
+ * consumes it synchronously, without enlarging Felucca's shared voice ABI. */
+static uint16_t rdx_note_velocity_q8;
+#endif
 
 typedef struct {
     int16_t g[G_COUNT];

@@ -45,12 +45,119 @@ async function boot() {
 
 const d = await boot();
 const held = await boot();
+const effected = await boot();
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
-check("all 35 RDX factory voices are visible", d.ex.web_test_preset_total() === 35);
+check("32 Factory and 21 Selected RDX voices are visible", d.ex.web_test_preset_total() === 53);
+check("RDX TYPE defaults to the optimized renderer", d.ex.web_test_rdx_type() === 1);
+d.ex.web_test_rdx_type_set(0);
+check("System RDX TYPE can switch back to the original renderer", d.ex.web_test_rdx_type() === 0);
+d.ex.web_test_rdx_type_set(1);
+check("System RDX TYPE can switch to the optimized renderer", d.ex.web_test_rdx_type() === 1);
+check("MIDI velocity curve defaults to HARD 1", d.ex.web_test_velocity_curve() === 3);
+const velocityAt64 = [96, 80, 64, 48, 32];
+let velocityCurvesOk = true;
+let velocityFractionsOk = true;
+for (let curve = 0; curve < velocityAt64.length; curve++) {
+  d.ex.web_test_velocity_curve_set(curve);
+  velocityCurvesOk &&= d.ex.web_test_velocity_curve() === curve;
+  velocityCurvesOk &&= d.ex.web_test_velocity_map(64) === velocityAt64[curve];
+  let previous = 0;
+  let previousQ8 = 0;
+  let fractional = false;
+  for (let velocity = 1; velocity <= 127; velocity++) {
+    const mapped = d.ex.web_test_velocity_map(velocity);
+    const mappedQ8 = d.ex.web_test_velocity_map_q8(velocity);
+    velocityCurvesOk &&= mapped >= previous && mapped >= 1 && mapped <= 127;
+    velocityFractionsOk &&= mappedQ8 > previousQ8 && mappedQ8 <= 127 * 256;
+    fractional ||= (mappedQ8 & 255) !== 0;
+    previous = mapped;
+    previousQ8 = mappedQ8;
+  }
+  velocityCurvesOk &&= previous === 127;
+  velocityFractionsOk &&= previousQ8 === 127 * 256;
+  if (curve !== 2) velocityFractionsOk &&= fractional;
+}
+check("all five MIDI velocity curves are monotonic with the expected shapes", velocityCurvesOk);
+check("curved MIDI velocity retains distinct Q8.8 fractional values", velocityFractionsOk);
+d.ex.web_test_velocity_curve_set(0);
+const soft2a = d.ex.web_test_velocity_map_q8(69);
+const soft2b = d.ex.web_test_velocity_map_q8(70);
+check("RDX interpolates two fractional velocities that round to the same 7-bit value",
+      d.ex.web_test_velocity_map(69) === d.ex.web_test_velocity_map(70) &&
+      soft2a !== soft2b &&
+      d.ex.web_test_rdx_velocity_gain(soft2a) !== d.ex.web_test_rdx_velocity_gain(soft2b));
+d.ex.web_test_velocity_curve_set(3);
+const cstr = (fn, index) => {
+  let s = "";
+  for (let i = 0; i < 32; i++) {
+    const c = fn(index, i);
+    if (!c) break;
+    s += String.fromCharCode(c);
+  }
+  return s;
+};
+let firmwareVersion = "";
+for (let i = 0; i < 24; i++) {
+  const c = d.ex.web_test_version_byte(i);
+  if (!c) break;
+  firmwareVersion += String.fromCharCode(c);
+}
+check("RDX firmware identifies itself as Felucca RDX 0.5", firmwareVersion === "RDX 0.5");
+check("sound-set registry contains Factory and Selected",
+      d.ex.web_test_rdx_set_count() === 2 &&
+      cstr(d.ex.web_test_rdx_set_name_byte, 0) === "Factory" &&
+      cstr(d.ex.web_test_rdx_set_name_byte, 1) === "Selected");
+check("Factory set has 32 entries and excludes the three non-factory sounds",
+      d.ex.web_test_rdx_set_size(0) === 32 &&
+      d.ex.web_test_rdx_set_preset(0, 0) === 3 &&
+      cstr(d.ex.web_test_rdx_preset_name_byte, 3) === "DigiChord");
+check("Selected set has 21 imported SysEx entries",
+      d.ex.web_test_rdx_set_size(1) === 21 &&
+      d.ex.web_test_rdx_set_preset(1, 0) === 35 &&
+      cstr(d.ex.web_test_rdx_preset_name_byte, 35) === "Ph.D Brass" &&
+      cstr(d.ex.web_test_rdx_preset_name_byte, 55) === "Transistor");
 check("an old autosave cannot force DynaLead back to polyphony",
-      d.ex.web_test_rdx_restore_stale_voice(7) === 1);
+      d.ex.web_test_rdx_restore_stale_voice(4) === 1);
+const restoredLegend = d.ex.web_test_rdx_restore_stale_slot();
+check(`an old autosave PATCH mismatch reloads the current LegendEP data (0x${restoredLegend.toString(16)})`,
+      restoredLegend === ((6 << 16) | (16 << 8) | 62));
 
-for (let p = 0; p < 35; p++) {
+d.ex.web_test_rdx_preset(0);                          // DigiChord: FLANGER -> REVERB 59, 20
+check("RDX Reverb Depth 59 maps to Felucca send 19",
+      d.ex.web_test_rdx_reverb_send(1) === 19);
+check("RDX Reverb keeps the requested TIME and fixed Felucca DAMP 60",
+      d.ex.web_test_rdx_reverb_time(1) === 20 && d.ex.web_test_rdx_reverb_damp() === 60);
+check("RDX Reverb TIME is stretched by 1.5 for Felucca HALL SIZE",
+      d.ex.web_test_rdx_reverb_mapped_size(1) === 30);
+check("RDX Delay DEPTH 50 maps to Felucca SEND 30 / FDBK 60",
+      d.ex.web_test_rdx_delay_send(50) === 30 &&
+      d.ex.web_test_rdx_delay_feedback(50) === 60);
+check("RDX Delay keeps Felucca's COLOR 70 / MIX 90 defaults",
+      d.ex.web_test_rdx_delay_color() === 70 && d.ex.web_test_rdx_delay_mix() === 90);
+check("RDX Delay TIME uses the measured full-rate 11.6 ms to 1201 ms range",
+      d.ex.web_test_rdx_delay_samples(0) === 512 &&
+      d.ex.web_test_rdx_delay_samples(127) === 52964);
+check("RDX Distortion uses PicoFaceDX's linear 300 Hz to 8 kHz one-pole TONE",
+      d.ex.web_test_rdx_dist_tone_q16(0) === 2742 &&
+      d.ex.web_test_rdx_dist_tone_q16(42) === 21849 &&
+      d.ex.web_test_rdx_dist_tone_q16(127) === 44572);
+check("RDX Distortion uses PicoFaceDX's quadratic 1x to 25x DRIVE curve",
+      d.ex.web_test_rdx_dist_drive_q12(0) === 4096 &&
+      d.ex.web_test_rdx_dist_drive_q12(5) === 4248 &&
+      d.ex.web_test_rdx_dist_drive_q12(127) === 102400);
+check("RDX Distortion level is unity at 0, gently raised at 5, and +30% at 100",
+      d.ex.web_test_rdx_dist_target_q16(0) === 65536 &&
+      d.ex.web_test_rdx_dist_target_q16(5) === 66519 &&
+      d.ex.web_test_rdx_dist_target_q16(100) === 85197 &&
+      d.ex.web_test_rdx_dist_target_q16(127) === 85197);
+d.ex.web_midi(0x90, 60, 100);
+d.renderFrames(128);
+check("a sounding RDX patch applies the stretched TIME to native HALL SIZE",
+      d.ex.web_test_rdx_reverb_size() === 30);
+d.ex.web_midi(0x80, 60, 0);
+d.render(1200);
+
+for (let p = 0; p < 53; p++) {
   d.ex.web_test_rdx_preset(p);
   held.ex.web_test_rdx_preset(p);
   d.ex.web_test_rdx_dry();
@@ -71,12 +178,41 @@ for (let p = 0; p < 35; p++) {
   held.renderFrames(128);
   d.render(1200);
   held.render(1200);
-  check(`factory voice ${String(p + 1).padStart(2, "0")} renders audio (peak ${audio.peak.toFixed(3)})`,
+  check(`RDX voice ${String(p + 1).padStart(2, "0")} renders audio (peak ${audio.peak.toFixed(3)})`,
         audio.peak > 0.002 && audio.energy > 1);
-  check(`factory voice ${String(p + 1).padStart(2, "0")} follows the held waveform at note-off (${onsetError.toFixed(5)})`,
+  check(`RDX voice ${String(p + 1).padStart(2, "0")} follows the held waveform at note-off (${onsetError.toFixed(5)})`,
         onsetError < 0.002);
-  check(`factory voice ${String(p + 1).padStart(2, "0")} keeps its release de-click tail alive`, heldForJoin);
+  check(`RDX voice ${String(p + 1).padStart(2, "0")} keeps its release de-click tail alive`, heldForJoin);
 }
+
+// One serial-chain example for every Reface effect type.  These run with the
+// native patch FX enabled; the engine-only loop above deliberately bypasses
+// them so a dark effect cannot masquerade as a silent oscillator patch.
+for (const [p, label] of [[0, "flanger/reverb"], [1, "distortion/delay"],
+                          [2, "chorus/delay"], [8, "phaser/chorus"],
+                          [17, "flanger/delay"], [32, "reverb/reverb"],
+                          [36, "distortion/touch wah"], [42, "reverb/reverb"],
+                          [51, "reverb/distortion"]]) {
+  effected.ex.web_test_rdx_preset(p);
+  effected.ex.web_test_audio_flush();
+  effected.ex.web_midi(0x90, 60, 100);
+  const audio = effected.renderFrames(128 * 120);
+  if (p === 2) {
+    check("RDX Chorus uses fixed Felucca SEND 20",
+          effected.ex.web_test_rdx_chorus_send() === 20);
+    check("RDX Chorus halves MotionPad DEPTH 30 while keeping RATE 74",
+          effected.ex.web_test_rdx_chorus_depth() === 15 &&
+          effected.ex.web_test_rdx_chorus_rate() === 74);
+  }
+  effected.ex.web_midi(0x80, 60, 0);
+  effected.render(1500);
+  check(`native ${label} effect routing renders audio`, audio.peak > 0.002 && audio.energy > 1);
+}
+effected.ex.web_test_rdx_preset(36);                    // WahClav.: DIST -> TOUCH WAH
+check("Touch Wah is detected on the current RDX patch", effected.ex.web_test_rdx_wah_active() === 1);
+const wah0 = effected.ex.web_test_rdx_wah_pos();
+check("Touch Wah manual centre follows SELECT control",
+      effected.ex.web_test_rdx_wah_turn(9) === Math.min(127, wah0 + 9));
 
 d.ex.web_test_rdx_preset(0);
 held.ex.web_test_rdx_preset(0);
@@ -177,6 +313,7 @@ let imported = patchBytes();
 const common = Array.from(imported.slice(0, 38));
 const op0 = Array.from(imported.slice(38, 66));
 const oldMode = common[13];
+common[12] = 64;                        // neutral transpose for the C4 -> C5 glide assertions
 common[13] = 2;                         // MONO LEGATO
 common[14] = 96;                        // RDX portamento time
 common[17] = 1;                         // triangle LFO

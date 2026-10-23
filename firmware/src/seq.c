@@ -619,7 +619,7 @@ static __attribute__((noinline)) void cin_keep(track_t *t, uint32_t note, uint32
     cin_up[i] &= (uint8_t)~(1u << k);
 }
 
-static void input_on(track_t *t, uint32_t note, uint32_t vel)
+static void input_on_q8(track_t *t, uint32_t note, uint32_t vel, uint32_t vel_q8)
 {
     last_note = (uint8_t)note;
     if (cin_left)
@@ -629,7 +629,12 @@ static void input_on(track_t *t, uint32_t note, uint32_t vel)
     if (t->p[P_AMODE])
         arp_add(t, note);
     else
-        trk_note_on(t, note, vel);
+        trk_note_on_q8(t, note, vel, vel_q8);
+}
+
+static void input_on(track_t *t, uint32_t note, uint32_t vel)
+{
+    input_on_q8(t, note, vel, vel << 8);
 }
 
 static int midi_note_held(const track_t *t, uint32_t note);

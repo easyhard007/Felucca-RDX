@@ -209,11 +209,12 @@ static int menu_large(void) { return (ui_prefs & PREF_LARGE) != 0u; }
 static uint32_t menu_tab(void) { return MI_TAB[ui.menu_sel % MI_COUNT]; }
 /* the shown tab's rows: 24 px (LARGE 28, a tab of up to 5 rows), 2 px apart (a tab of 6: 1 px, its panel then ends
  * 6 px above the key hints as the others do; the rule between two rows is that gap row; 1.2, a tab of 7: 21 px rows
- * 1 px apart, its panel then ends 4 px lower, LARGE too; 1.3, a tab of 8: 18 px rows 1 px apart, the same end) */
+ * 1 px apart, its panel then ends 4 px lower, LARGE too; 1.3, a tab of 8: 18 px rows; an RDX SYSTEM tab of 9:
+ * 16 px rows, both 1 px apart and ending at the same place) */
 static int32_t mr_h(void)
 {
     uint32_t n = mtab_rows(menu_tab());
-    return n > 7u ? 18 : n > 6u ? 21 : menu_large() && n <= 5u ? 28 : 24;
+    return n > 8u ? 16 : n > 7u ? 18 : n > 6u ? 21 : menu_large() && n <= 5u ? 28 : 24;
 }
 static int32_t mr_gap(void) { return mtab_rows(menu_tab()) <= 5u ? 2 : 1; }
 static int32_t mr_y(uint32_t k) { return MP_Y + MP_PAD + (int32_t)k * (mr_h() + mr_gap()); }
@@ -293,7 +294,9 @@ static void menu_switch(int32_t xr, int32_t y, int32_t h, int on, int sel)
 /* the tab's row k (menu_items.c row `row`) */
 static void menu_row(uint32_t k, uint32_t row)
 {
-    int32_t y = mr_y(k), h = mr_h(), vy = y + CAP_IN(M, h);   /* the label and its value: M (a list's rows) */
+    int dense = mtab_rows(menu_tab()) > 8u;
+    int32_t y = mr_y(k), h = mr_h(), vy = y + (dense ? CAP_IN(S, h) : CAP_IN(M, h));
+    const aafont_t *font = dense ? &AF_S : &AF_M;
     int sel = row == ui.menu_sel;
     uint16_t bg = sel ? T_THEME : T_SURF, fg = sel ? T_INK : T_TEXT, val = sel ? T_INK : T_THEME;
     const char *v;
@@ -305,7 +308,7 @@ static void menu_row(uint32_t k, uint32_t row)
     else if (k && row - 1u != ui.menu_sel)             /* a rule from the row above (none beside the selected one) */
         cv_rect(MR_X + 6, y - 1, MR_W - 12, 1, ux.style ? T_RULE : T_LINE);
     GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "menu row name centred up/down");
-    cv_text_on(MR_LX, vy, &AF_M, MI_NAME[row], fg, bg);
+    cv_text_on(MR_LX, vy, font, MI_NAME[row], fg, bg);
     if (row == MI_LCLEAR) {                            /* LEARN CLEAR (1.5): how many CCs are learned, "NONE" */
         char b[8] = "NONE";
         if (ml_count()) {
@@ -313,7 +316,7 @@ static void menu_row(uint32_t k, uint32_t row)
             str_cpy(b + str_len(b), " CC", 4);
         }
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "menu row value centred up/down");
-        cv_text_r(MR_VR, vy, &AF_M, b, val, bg);
+        cv_text_r(MR_VR, vy, font, b, val, bg);
         return;
     }
     if (row >= MI_VALUES) {                            /* CALIBRATION, ABOUT: OCT+ opens them */
@@ -336,14 +339,14 @@ static void menu_row(uint32_t k, uint32_t row)
     }
     GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "menu row value centred up/down");
     if (row != MI_COLOR) {
-        cv_text_r(MR_VR, vy, &AF_M, v, val, bg);
+        cv_text_r(MR_VR, vy, font, v, val, bg);
         return;
     }
     {   /* COLOR: the palette's name and its five colours (BG SURF TEXT THEME ACCENT), live */
         uint32_t c;
         const uint16_t *tok = &T_BG;
         int32_t x0 = MR_VR - 74, sy = y + HALF_UP(h - 12);
-        cv_text_r(x0 - 6, vy, &AF_M, v, val, bg);
+        cv_text_r(x0 - 6, vy, font, v, val, bg);
         for (c = 0; c < 5u; c++) {
             cv_rrect(x0 + (int32_t)c * 15, sy, 12, 12, -3, T_RAISE, bg);       /* a rim for the dark ones */
             cv_rrect(x0 + 1 + (int32_t)c * 15, sy + 1, 10, 10, -2, tok[c], T_RAISE);

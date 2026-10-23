@@ -19,6 +19,9 @@ enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_H
 #if FELUCCA_CPU2
        MI_CPU2,                                        /* (not in a FELUCCA_CPU2=0 build: core.h) */
 #endif
+#if FELUCCA_RDX
+       MI_RDXTYPE, MI_VELCURVE,
+#endif
        MI_PANEL, MI_INFO, MI_ABOUT, MI_COUNT };
                                                        /* (1.1: the metronome's rows in AUDIO; 1.2: RESTORE LAST in
                                                         * SYSTEM, SCALE LEDS STEP PREVIEW CHORD ENTRY in CONTROL, SCOPE in
@@ -27,8 +30,12 @@ enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_H
                                                         * in CONTROL, T1..T4 CHANNEL, AUTO SELECT and SCREEN WAKE
                                                         * in MIDI; 1.6.1: 2ND CORE in SYSTEM) */
 #define MI_VALUES MI_PANEL
-#if FELUCCA_CPU2
+#if FELUCCA_CPU2 && FELUCCA_RDX
+#define MI_TEXT(row) ((row) == MI_CPU2 || (row) == MI_RDXTYPE)
+#elif FELUCCA_CPU2
 #define MI_TEXT(row) ((row) == MI_CPU2)                /* OFF / ON (BETA): its values as words, not a switch (ui_menu.c) */
+#elif FELUCCA_RDX
+#define MI_TEXT(row) ((row) == MI_RDXTYPE)
 #else
 #define MI_TEXT(row) 0
 #endif
@@ -44,6 +51,9 @@ static const char *const MI_NAME[MI_COUNT] = {"COLOR", "STYLE", "LARGE", "ANIM",
 #if FELUCCA_CPU2
                                               "2ND CORE",
 #endif
+#if FELUCCA_RDX
+                                              "RDX TYPE", "VEL CURVE",
+#endif
                                               "CALIBRATION", "INFO",
                                               "ABOUT"};
 /* 1.0.5: the MENU's tabs (ui_menu.c: ALGORITHM steps between them, PRESETS among one tab's rows; the editor gets a
@@ -53,7 +63,7 @@ static const char *const MI_NAME[MI_COUNT] = {"COLOR", "STYLE", "LARGE", "ANIM",
  * joins a tab here. Tabs are in the order the device shows them; a tab's index is what the editor is told, not an id
  * (1.2: MIDI came in before SYSTEM, SYSTEM's index 3 -> 4) */
 enum { MTAB_DISPLAY, MTAB_CONTROL, MTAB_AUDIO, MTAB_MIDI, MTAB_SYSTEM, MTAB_COUNT };
-#define MTAB_ROWS 8u
+#define MTAB_ROWS 9u
 static const char *const MTAB_NAME[MTAB_COUNT] = {"DISPLAY", "CONTROL", "AUDIO", "MIDI", "SYSTEM"};
 static const uint8_t MI_TAB[MI_COUNT] = {
     MTAB_DISPLAY, MTAB_DISPLAY, MTAB_DISPLAY, MTAB_DISPLAY, MTAB_DISPLAY,   /* COLOR STYLE LARGE ANIM LEDS */
@@ -75,6 +85,9 @@ static const uint8_t MI_TAB[MI_COUNT] = {
     MTAB_SYSTEM, MTAB_SYSTEM, MTAB_SYSTEM,                                  /* USB SERIAL, RESTORE LAST, HELP (1.5) */
 #if FELUCCA_CPU2
     MTAB_SYSTEM,                                                            /* 2ND CORE (1.6.1) */
+#endif
+#if FELUCCA_RDX
+    MTAB_SYSTEM, MTAB_SYSTEM,                                               /* RDX TYPE, MIDI velocity curve */
 #endif
     MTAB_SYSTEM, MTAB_SYSTEM, MTAB_SYSTEM,                                  /* CALIBRATION, INFO (1.2), ABOUT */
 };
@@ -178,10 +191,18 @@ static const char *const LEDS_ROW_N[LEDS_ROWS] = {"OFF", "DIM LO", "DIM HI", "IN
 
 /* MENU > CONTROL > SELECT (ui.c sel_mode): BPM, PAGE (1.5.5, #188), MODW, VEL (1.5.6, #84), append-only */
 static const char *const SELECT_N[SEL_N] = {"BPM", "PAGE", "MODW", "VEL"};
+#if FELUCCA_RDX
+static const char *const RDX_TYPE_N[2] = {"ORIGIN", "OPTIMIZED"};
+static const char *const VEL_CURVE_NM[VEL_CURVE_N] = {"SOFT 2", "SOFT 1", "MEDIUM", "HARD 1", "HARD 2"};
+#endif
 
 /* a row's value as 0..menu_n(row) - 1 in the order the menu steps it (LEDS: OFF DIM LO DIM HI INV INV LO INV HI) */
 static uint32_t menu_n(uint32_t row)
 {
+#if FELUCCA_RDX
+    if (row == MI_VELCURVE)
+        return VEL_CURVE_N;
+#endif
     return row == MI_COLOR ? palette_n() : row == MI_LOWCUT || (row >= MI_CLICK && row <= MI_COUNTIN) ? 3u :
            row == MI_HOLD ? 4u : row == MI_LEDS ? LEDS_ROWS : row == MI_SCROFF ? NELEM(SCROFF_N) :
            row == MI_TUNE ? TUNE_N : row == MI_MIDIIN ? NELEM(N_ROUTE) : MI_TCH(row) ? MCH_N : row == MI_ANIM ? 3u : row == MI_HOME ? HV_COUNT :
@@ -202,6 +223,10 @@ static uint32_t menu_get(uint32_t row)
     case MI_ANIM: return ui_prefs & PREF_ANIM_OFF ? 1u : (ui_idle & 1u) ? 2u : 0u;
     case MI_HOME: return ui_home_view < HV_COUNT ? ui_home_view : HV_SCOPE;
     case MI_SELECT: return sel_mode();
+#if FELUCCA_RDX
+    case MI_RDXTYPE: return rdx_type_get();
+    case MI_VELCURVE: return midi_velocity_curve_get();
+#endif
     case MI_CLICK: case MI_CLKLVL: case MI_COUNTIN: return rp_get(row - MI_CLICK);
     case MI_TUNE: return (uint32_t)(clamp(song.g[G_TUNE], TUNE_MIN, TUNE_MIN + (int32_t)TUNE_N - 1) - TUNE_MIN);
     case MI_MIDIIN: return (uint32_t)clamp(song.g[G_ROUTE], 0, (int32_t)NELEM(N_ROUTE) - 1);
@@ -230,6 +255,10 @@ static const char *menu_vname(uint32_t row, uint32_t v)
     case MI_ANIM: return ANIM_N[v % 3u];
     case MI_HOME: return HOME_N[v % HV_COUNT];
     case MI_SELECT: return SELECT_N[v % SEL_N];
+#if FELUCCA_RDX
+    case MI_RDXTYPE: return RDX_TYPE_N[v & 1u];
+    case MI_VELCURVE: return VEL_CURVE_NM[v % VEL_CURVE_N];
+#endif
     case MI_LEDS: return LEDS_ROW_N[v % LEDS_ROWS];
     case MI_MIDIIN: return N_ROUTE[v % NELEM(N_ROUTE)];
     case MI_TCH1: case MI_TCH2: case MI_TCH3: case MI_TCH4: {   /* "1".."16", OMNI, OFF */
@@ -292,6 +321,15 @@ static void menu_put(uint32_t row, uint32_t v)
     case MI_SELECT:                                    /* (1.5.5 PAGE bit 4; 1.5.6 MODW VEL bit 6 too: ui.c sel_mode) */
         ui_prefs2 = (uint8_t)((ui_prefs2 & ~((PREF_SEL_PAGE | PREF_SEL_HI) >> 16)) | (v & 1u) << 4 | (v & 2u) << 5);
         break;
+#if FELUCCA_RDX
+    case MI_RDXTYPE:
+        ui_idle = (uint8_t)((ui_idle | RDX_TYPE_SET) & ~RDX_TYPE_OPT);
+        if (v)
+            ui_idle |= RDX_TYPE_OPT;
+        rdx_type_set(v);
+        break;
+    case MI_VELCURVE: velocity_curve_store(v); break;
+#endif
     case MI_LEDS:                                      /* (INV LO / INV HI: INV and its level, ui.c ui_leds_inv) */
         settings_leds = LEDS_MENU[v < LEDS_COUNT ? v : LEDS_COUNT - 1u];
         ui_leds_inv = (uint8_t)(v < LEDS_COUNT ? 0u : v - (LEDS_COUNT - 1u));

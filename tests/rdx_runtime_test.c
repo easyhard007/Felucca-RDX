@@ -26,9 +26,10 @@ static void glide_case(unsigned mode, unsigned from, unsigned to, int gap) {
    assert(n->pitch==b);
  }
 }
-static uint64_t render_case(unsigned voices,int dual,unsigned fault) {
+static uint64_t render_case(unsigned preset,unsigned voices,int dual,unsigned fault,unsigned type) {
  reset(); c1h_off=!dual;c1h_fail_wait_at=fault;setenv("C1_MASK","auto",1);
- host_preset(&trk[0],ENGI_RDX,0);
+ rdx_type_set(type);
+ host_preset(&trk[0],ENGI_RDX,rdx_visible_preset(preset % RDX_NPRESETS));
  track_t *t=&trk[0];t->p[P_SPRD]=100;t->p[P_REV]=30;
  for(unsigned i=0;i<voices;i++)trk_note_on(t,48+i*3,100);
  uint64_t h=0xcbf29ce484222325ULL;int32_t o[CTL*2];
@@ -37,15 +38,15 @@ static uint64_t render_case(unsigned voices,int dual,unsigned fault) {
    mix_block(o,CTL);
    for(unsigned i=0;i<CTL*2;i++){h^=(uint32_t)o[i];h*=0x100000001b3ULL;}
  }
- const unsigned char *state=ENG_MEM(0);
- for(unsigned i=0;i<sizeof(rdx_note_t)*RDX_POLY;i++){h^=state[i];h*=0x100000001b3ULL;}
+ /* Cached coefficients intentionally differ between the two implementations;
+  * the audio hash above is the cross-renderer contract. */
  if(dual&&voices)assert(c1h_taken>0);
  if(fault&&voices)assert(c1h_off);
  return h;
 }
-static uint64_t isolated(unsigned voices,int dual,unsigned fault){
+static uint64_t isolated(unsigned preset,unsigned voices,int dual,unsigned fault,unsigned type){
  int fd[2],status;uint64_t h=0;assert(!pipe(fd));pid_t pid=fork();assert(pid>=0);
- if(!pid){h=render_case(voices,dual,fault);assert(write(fd[1],&h,sizeof h)==sizeof h);_exit(0);}
+ if(!pid){h=render_case(preset,voices,dual,fault,type);assert(write(fd[1],&h,sizeof h)==sizeof h);_exit(0);}
  close(fd[1]);assert(read(fd[0],&h,sizeof h)==sizeof h);close(fd[0]);waitpid(pid,&status,0);assert(status==0);return h;
 }
 int main(void){
@@ -61,10 +62,17 @@ int main(void){
  trk_note_on(&trk[0],60,100);blocks(100);trk[0].p[P_REL]=0;trk_note_off(&trk[0],60);blocks(1);
  assert(trk[0].v[0].active);assert(!rdx_note(&trk[0],&trk[0].v[0])->down);
  puts("RDX: native release remains active with generic REL=0 ok");
+ reset();rdx_type_set(0);rdx_perf.sig=rdx_perf_sig(&trk[0]);rdx_perf.avg_q8=123u<<8;rdx_perf.peak_us=456;rdx_perf.valid=1;
+ rdx_type_set(1);rdx_perf_half_begin();assert(!rdx_perf.avg_q8&&!rdx_perf.peak_us&&!rdx_perf.valid);
+ puts("RDX: changing renderer clears AVG and PEAK on the next audio half");
+ for(unsigned p=0;p<RDX_NPRESETS;p++)assert(isolated(p,1,0,0,0)==isolated(p,1,0,0,1));
+ puts("RDX: all factory presets ORIGIN/OPTIMIZED audio identical");
  for(unsigned n=1;n<=8;n++){
-  uint64_t h=isolated(n,0,0);assert(h==isolated(n,1,0));
-  assert(h==isolated(n,1,1));assert(h==isolated(n,1,17));
-  printf("RDX: %u voices serial/parallel/recovery audio and state identical\n",n);
+  uint64_t h=isolated(0,n,0,0,0);assert(h==isolated(0,n,1,0,0));
+  assert(h==isolated(0,n,1,1,0));assert(h==isolated(0,n,1,17,0));
+  assert(h==isolated(0,n,0,0,1));assert(h==isolated(0,n,1,0,1));
+  assert(h==isolated(0,n,1,1,1));assert(h==isolated(0,n,1,17,1));
+  printf("RDX: %u voices ORIGIN/OPTIMIZED and serial/parallel/recovery identical\n",n);
  }
  return 0;
 }

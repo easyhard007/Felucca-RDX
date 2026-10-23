@@ -38,10 +38,10 @@
 extern char _guard0[], _ustack_lo[], _guard1[], _sstack_lo[], _sstack_top[], _etext[];
 #if FM1_CPU1_USED
 extern uint32_t _rt_start[], _rt_end[], _c1_end[];
-#define FM1_RAMCODE_END _c1_end                  /* .ram_text, then .c1_text (the second core's loop, app.ld) */
+#define FM1_RAMCODE_END _c1_end                  /* .ram_text, .fast_text, then .c1_text (app.ld) */
 #else
-extern uint32_t _rt_start[], _rt_end[];
-#define FM1_RAMCODE_END _rt_end
+extern uint32_t _rt_start[], _rt_end[], _fast_end[];
+#define FM1_RAMCODE_END _fast_end
 #endif
 
 enum { FM1_GUARD_STACK = 1, FM1_GUARD_WRITE = 2, FM1_GUARD_BUS = 4, FM1_GUARD_PC = 8 };

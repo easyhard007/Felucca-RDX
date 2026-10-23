@@ -248,8 +248,30 @@ enum { CF_NONE, CF_CLEAR_SEQ, CF_CLEAR_TRK, CF_OVR_PROJ, CF_OVR_USER, CF_LOAD_PA
  * (ui.force), then DISPON (lcd_power(2)) */
 #define ui_scr (favorites.factory[15][27])
 /* MENU > ANIM IDLE (1.2, Discussion #135; menu_items.c, ui_input.c idle_leds): bit 0, the LEDs' idle animation, in a
- * byte no engine uses, kept with the settings; 0 in every older setting = off. The other bits: 0 (room for a delay) */
+ * byte no engine uses, kept with the settings; 0 in every older setting = off. RDX builds use bit 1 for MENU >
+ * SYSTEM > RDX TYPE (0 ORIGIN, 1 OPTIMIZED), bit 2 to mark that choice as explicitly stored, and bits 3..5 for the
+ * MIDI velocity curve. Stored curve 0 is HARD 1, so every older record receives the new RDX default. */
 #define ui_idle (favorites.factory[15][10])
+#if FELUCCA_RDX
+#define RDX_TYPE_OPT 2u
+#define RDX_TYPE_SET 4u
+#define VEL_CURVE_SHIFT 3u
+#define VEL_CURVE_MASK (7u << VEL_CURVE_SHIFT)
+static const uint8_t VEL_CURVE_STORE[VEL_CURVE_N] = {1, 2, 3, 0, 4};
+static const uint8_t VEL_CURVE_LOAD[8] = {VEL_HARD1, VEL_SOFT2, VEL_SOFT1, VEL_MEDIUM,
+                                          VEL_HARD2, VEL_HARD1, VEL_HARD1, VEL_HARD1};
+static void velocity_curve_store(uint32_t curve)
+{
+    curve = curve < VEL_CURVE_N ? curve : VEL_HARD1;
+    ui_idle = (uint8_t)((ui_idle & ~VEL_CURVE_MASK) |
+                        (uint32_t)VEL_CURVE_STORE[curve] << VEL_CURVE_SHIFT);
+    midi_velocity_curve_set(curve);
+}
+static void velocity_curve_load(void)
+{
+    midi_velocity_curve_set(VEL_CURVE_LOAD[(ui_idle & VEL_CURVE_MASK) >> VEL_CURVE_SHIFT]);
+}
+#endif
 #define SCR_DEF 0u                                     /* NEVER (1.1.5.1; 1.1.5: 30 MIN) */
 static const uint8_t SCR_CODE[5] = {0, 2, 1, 4, 7};    /* the stored byte of NEVER 5 15 30 60 MIN (1.1.5: 3 2 1 0 7) */
 static const uint8_t SCR_DEC[8] = {0, 2, 1, 0, 3, 0, 0, 4};   /* .. and back (3: 1.1.5's NEVER; 5, 6 unknown) */
@@ -1278,6 +1300,10 @@ static int param_kept(uint32_t i)
  * (SAMPLE 4, once PERC, is past SMP_NPRESETS: apply_preset_to loads it as DRUM) */
 static uint32_t preset_orig(const engine_t *e, uint32_t k)
 {
+#if FELUCCA_RDX
+    if (e == &ENG_RDX)
+        return rdx_preset_visible(k) ? k : RDX_SET_FACTORY[0];
+#endif
     return e->presets == SMP_PRESET_TABLE && k < SMP_NSETS ? SMP_SET_ORIG[k] : k;
 }
 
@@ -1285,6 +1311,13 @@ static uint32_t preset_orig(const engine_t *e, uint32_t k)
 static uint32_t preset_rank(const engine_t *e, uint32_t k)
 {
     uint32_t i, n = 0;
+#if FELUCCA_RDX
+    if (e == &ENG_RDX) {
+        for (i = 0; i < k; i++)
+            n += rdx_preset_visible(i);
+        return n;
+    }
+#endif
     if (e->presets != SMP_PRESET_TABLE)
         return k;
     for (i = 0; i < k; i++)
@@ -1292,7 +1325,14 @@ static uint32_t preset_rank(const engine_t *e, uint32_t k)
     return n;
 }
 
-#define preset_shown(e) (ENGINES[e]->npresets - (ENGINES[e]->presets == SMP_PRESET_TABLE ? SMP_NALIAS : 0u))
+static uint32_t preset_shown(uint32_t e)
+{
+#if FELUCCA_RDX
+    if (ENGINES[e] == &ENG_RDX)
+        return RDX_NPRESETS;
+#endif
+    return ENGINES[e]->npresets - (ENGINES[e]->presets == SMP_PRESET_TABLE ? SMP_NALIAS : 0u);
+}
 
 #if !FELUCCA_FM4
 /* DIGITAL (engine 1, retired): t's sound = p, values as DIGITAL has them, converted to FM6 with a patch of its own

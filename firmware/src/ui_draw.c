@@ -822,8 +822,23 @@ static void draw_foot(void)
     const page_t *pg = cur_page();
     const engine_t *e = ENGINES[TSEL->eng_req % NENGINES];
     const char *ename = e->name, *help;
+    int home_sound_set = 0;
     int32_t x;
     sound_name(t, pn);
+#if FELUCCA_RDX
+    if (ui.home && e == &ENG_RDX) {
+        uint32_t i, n = str_len(pn);
+        if (n > sizeof pn - 3u)
+            n = sizeof pn - 3u;
+        for (i = n + 1u; i; i--)
+            pn[i + 1u] = pn[i - 1u];
+        pn[0] = '-';
+        pn[1] = ' ';
+        ename = user_of(t) < UP_SLOTS ? "User" :
+                rdx_sound_set_name((uint32_t)e->presets[t->preset % e->npresets].e[7]);
+        home_sound_set = 1;
+    }
+#endif
     if (ui.home)
         str_cpy(ti, "HOME", sizeof ti);
     else                                               /* page title + number in its family: "ENV DEST 2/2" */
@@ -913,7 +928,8 @@ static void draw_foot(void)
     }
     {   /* row 2: engine icon + name, sound, page title at the right with its icon before it (MIXER, PHRASES, SONG,
          * AUTOMATION); icons: their ink on the names' capitals */
-        uint32_t pi = ui.home ? ICON_NONE : page_icon(pg), ei = FELUCCA_ICONS ? engine_icon(ename) : ICON_NONE;
+        uint32_t pi = ui.home ? ICON_NONE : page_icon(pg);
+        uint32_t ei = FELUCCA_ICONS && !home_sound_set ? engine_icon(ename) : ICON_NONE;
         int32_t r = 232, tx, ex, need = text_w(&AF_S, pn), ew = text_w(&AF_S, ename);
         ex = 8 + (FELUCCA_ICONS ? 12 + 5 : 0) + (ew < 80 ? ew : 80);   /* (where the engine's name ends) */
         tx = r - text_w(&AF_S, ti) - (pi != ICON_NONE ? 16 : 0);
@@ -929,7 +945,8 @@ static void draw_foot(void)
             x += cv_icon_in(x, 19 + AF_S_CAP_Y, 0, AF_S_CAP_H, 12, ei, T_MID, T_BG) + 5;
         }
         x = cv_text_fit(x, 19, &AF_S, ename, T_THEME, T_BG, 80);
-        cv_free_text(x + 10, 19, &AF_S, pn, T_TEXT, T_BG, tx - 12 - (x + 10));
+        cv_free_text(x + (home_sound_set ? 3 : 10), 19, &AF_S, pn, T_TEXT, T_BG,
+                     tx - 12 - (x + (home_sound_set ? 3 : 10)));
         if (pi != ICON_NONE) {
             GFX_HOOK_ALIGN(0, 19 + AF_S_CAP_Y, 0, 19 + AF_S_CAP_Y + AF_S_CAP_H, AL_V,
                            "footer icons on the names' line");

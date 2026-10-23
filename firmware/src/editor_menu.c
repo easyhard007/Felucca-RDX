@@ -40,6 +40,9 @@ static const uint8_t ED_MENU[][2] = {
     {MI_CPU2, 32},                                     /* 1.6.1, the second core (Discussion #141): 2ND CORE OFF / ON (BETA),
                                                         * SYSTEM, from the next power-on (a FELUCCA_CPU2=0 build: 0..31) */
 #endif
+#if FELUCCA_RDX
+    {MI_VELCURVE, 33},                                 /* RDX: incoming MIDI velocity curve, SOFT 2 .. HARD 2 */
+#endif
 };
 #define ED_MENU_N NELEM(ED_MENU)
 

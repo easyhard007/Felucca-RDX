@@ -29,7 +29,11 @@
 #define FELUCCA_UAC 0
 #define FELUCCA_UART 0
 #ifndef FELUCCA_VERSION
+#if FELUCCA_RDX
+#define FELUCCA_VERSION "RDX 0.5"
+#else
 #define FELUCCA_VERSION "WEB"
+#endif
 #endif
 
 static uint8_t nor[0x100000];            /* the SPI NOR (erased: 0xFF) */
@@ -549,15 +553,85 @@ EXPORT uint32_t web_test_track_preset(uint32_t k) { return k < NTRK ? trk[k].pre
 #if FELUCCA_RDX
 EXPORT void web_test_rdx_preset(uint32_t p)
 {
+#if defined(__EMSCRIPTEN__)
+    rdx_fx_test_bypass = 0;
+#endif
     set_engine_of(&trk[0], ENGI_RDX);
-    apply_preset_to(&trk[0], p % RDX_NPRESETS);
+    apply_preset_to(&trk[0], rdx_visible_preset(p % RDX_NPRESETS));
     song.sel = 0;
 }
 EXPORT void web_test_rdx_dry(void)
 {
     track_t *t = &trk[0];
+#if defined(__EMSCRIPTEN__)
+    rdx_fx_test_bypass = 1;
+#endif
     t->p[P_DIST] = t->p[P_CHOR] = t->p[P_DLY] = t->p[P_REV] = 0;
     t->p[P_ITYPE] = t->p[P_IMIX] = 0;
+}
+EXPORT void web_test_rdx_type_set(uint32_t type) { menu_put(MI_RDXTYPE, type != 0u); }
+EXPORT uint32_t web_test_rdx_type(void) { return menu_get(MI_RDXTYPE); }
+EXPORT void web_test_velocity_curve_set(uint32_t curve) { menu_put(MI_VELCURVE, curve); }
+EXPORT uint32_t web_test_velocity_curve(void) { return menu_get(MI_VELCURVE); }
+EXPORT uint32_t web_test_velocity_map(uint32_t velocity) { return midi_velocity_map(velocity); }
+EXPORT uint32_t web_test_velocity_map_q8(uint32_t velocity) { return midi_velocity_map_q8(velocity); }
+EXPORT uint32_t web_test_rdx_velocity_gain(uint32_t velocity_q8)
+{
+    return rdx_velocity_gain_q15(velocity_q8, 127u);
+}
+EXPORT uint32_t web_test_rdx_wah_active(void) { return rdx_touch_wah_active(&trk[0]); }
+EXPORT uint32_t web_test_rdx_wah_pos(void) { return rdx_touch_wah_get(&trk[0]); }
+EXPORT uint32_t web_test_rdx_wah_turn(int32_t d) { return rdx_touch_wah_turn(&trk[0], d); }
+EXPORT uint32_t web_test_rdx_reverb_send(uint32_t slot)
+{
+    const rdx_patch_t *p = rdx_track_get(0);
+    return slot < 2u && (p->common.effects[slot][0] & 7u) == RFX_REVERB ?
+           rfx_reverb_send(p->common.effects[slot][1]) : 0u;
+}
+EXPORT uint32_t web_test_rdx_reverb_time(uint32_t slot)
+{
+    const rdx_patch_t *p = rdx_track_get(0);
+    return slot < 2u && (p->common.effects[slot][0] & 7u) == RFX_REVERB ?
+           p->common.effects[slot][2] & 127u : 0u;
+}
+EXPORT uint32_t web_test_rdx_reverb_mapped_size(uint32_t slot)
+{
+    const rdx_patch_t *p = rdx_track_get(0);
+    return slot < 2u && (p->common.effects[slot][0] & 7u) == RFX_REVERB ?
+           rfx_reverb_size(p->common.effects[slot][2]) : 0u;
+}
+EXPORT uint32_t web_test_rdx_reverb_size(void) { return rdx_rev_size; }
+EXPORT uint32_t web_test_rdx_reverb_damp(void) { return HALL_DAMP; }
+EXPORT uint32_t web_test_rdx_delay_send(uint32_t depth) { return rfx_delay_send(depth); }
+EXPORT uint32_t web_test_rdx_delay_feedback(uint32_t depth) { return rfx_delay_feedback(depth); }
+EXPORT uint32_t web_test_rdx_delay_samples(uint32_t time) { return rfx_delay_samples(time); }
+EXPORT uint32_t web_test_rdx_delay_color(void) { return RFX_DLY_COLOR; }
+EXPORT uint32_t web_test_rdx_delay_mix(void) { return RFX_DLY_MIX; }
+EXPORT uint32_t web_test_rdx_dist_tone_q16(uint32_t tone) { return RFX_DIST_TONE_Q16[tone & 127u]; }
+EXPORT uint32_t web_test_rdx_dist_drive_q12(uint32_t drive) { return rfx_dist_drive_q12(drive); }
+EXPORT uint32_t web_test_rdx_dist_target_q16(uint32_t drive) { return rfx_dist_target_q16(drive); }
+EXPORT uint32_t web_test_rdx_chorus_send(void) { return RFX_CHORUS_SEND; }
+EXPORT uint32_t web_test_rdx_chorus_depth(void) { return rdx_cho_depth; }
+EXPORT uint32_t web_test_rdx_chorus_rate(void) { return rdx_cho_rate; }
+EXPORT uint32_t web_test_rdx_set_count(void) { return NELEM(RDX_SOUND_SETS); }
+EXPORT uint32_t web_test_rdx_set_size(uint32_t set)
+{
+    return set < NELEM(RDX_SOUND_SETS) ? RDX_SOUND_SETS[set].count : 0u;
+}
+EXPORT uint32_t web_test_rdx_set_preset(uint32_t set, uint32_t at)
+{
+    return set < NELEM(RDX_SOUND_SETS) && at < RDX_SOUND_SETS[set].count ?
+           RDX_SOUND_SETS[set].preset[at] : 0xFFFFFFFFu;
+}
+EXPORT uint32_t web_test_rdx_set_name_byte(uint32_t set, uint32_t at)
+{
+    const char *s = set < NELEM(RDX_SOUND_SETS) ? RDX_SOUND_SETS[set].name : "";
+    return at < str_len(s) ? (uint8_t)s[at] : 0u;
+}
+EXPORT uint32_t web_test_rdx_preset_name_byte(uint32_t preset, uint32_t at)
+{
+    const char *s = preset < RDX_NPATCHES ? RDX_PATCHES[preset].name : "";
+    return at < str_len(s) ? (uint8_t)s[at] : 0u;
 }
 EXPORT void web_test_audio_flush(void) { ring_r = ring_w; }
 EXPORT uint32_t web_test_active_voices(void)
@@ -654,7 +728,22 @@ EXPORT uint32_t web_test_rdx_restore_stale_voice(uint32_t p)
     proj_scratch.sum = proj_sum(&proj_scratch);
     return project_restore_runtime(&proj_scratch) ? 0xFFFFFFFFu : (uint32_t)trk[0].p[P_VOICE];
 }
+EXPORT uint32_t web_test_rdx_restore_stale_slot(void)
+{
+    web_test_rdx_preset(3);                         /* visible 3 = factory slot 6, LegendEP */
+    project_capture(&proj_scratch);
+    proj_scratch.t[0].p[P_E7] = RDX_FIRST_VISIBLE; /* simulate an older, mismatched PATCH value */
+    proj_scratch.sum = proj_sum(&proj_scratch);
+    if (project_restore_runtime(&proj_scratch))
+        return 0xFFFFFFFFu;
+    return ((uint32_t)(uint16_t)trk[0].p[P_E7] << 16) |
+           (web_test_rdx_reverb_send(1) << 8) | web_test_rdx_reverb_time(1);
+}
 EXPORT uint32_t web_test_engine_poly(void) { return ENG_RDX.poly; }
+EXPORT uint32_t web_test_version_byte(uint32_t i)
+{
+    return i < sizeof FELUCCA_VERSION ? (uint8_t)FELUCCA_VERSION[i] : 0u;
+}
 EXPORT uint32_t web_test_cpu0_pct(void) { return song.cpu_q8 * 100u / 256u; }
 #if FELUCCA_CPU2
 EXPORT uint32_t web_test_cpu1_pct(void) { return song.cpu1_q8 * 100u / 256u; }

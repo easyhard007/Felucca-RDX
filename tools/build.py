@@ -225,24 +225,27 @@ def build_app():
     elf = OUT / "felucca.elf"
     tc("pi32v2/bin/ld", "-T", FW / "app.ld", OUT / "crt0.o", OUT / "fm1_vec.o", OUT / "fm1_isr.o",
        *([OUT / "fm1_cpu1.o"] if CPU2 else []), OUT / "felucca.o", "-o", elf)
-    for sect in ("text.bin", "data.bin", "ramtext.bin", "c1text.bin"):
+    for sect in ("text.bin", "data.bin", "ramtext.bin", "fasttext.bin", "c1text.bin"):
         (OUT / sect).unlink(missing_ok=True)
     *_, syms, dis, rt = tc_all(("common/bin/objcopy", "-O", "binary", "-j", ".text", elf, OUT / "text.bin"),
                                ("common/bin/objcopy", "-O", "binary", "-j", ".data", elf, OUT / "data.bin"),
                                ("common/bin/objcopy", "-O", "binary", "-j", ".ram_text", elf, OUT / "ramtext.bin"),
+                               ("common/bin/objcopy", "-O", "binary", "-j", ".fast_text", elf, OUT / "fasttext.bin"),
                                *([("common/bin/objcopy", "-O", "binary", "-j", ".c1_text", elf, OUT / "c1text.bin")]
                                  if CPU2 else []),
                                ("common/bin/objdump", "-t", elf),
                                ("common/bin/objdump", "-d", elf),
-                               ("common/bin/objdump", "-d", "-j", ".ram_text", *(("-j", ".c1_text") if CPU2 else ()),
+                               ("common/bin/objdump", "-d", "-j", ".ram_text", "-j", ".fast_text",
+                                *(("-j", ".c1_text") if CPU2 else ()),
                                 elf))
     (OUT / "felucca.dis").write_text(dis)
 
     def symv(name):
         return int(re.search(r"^([0-9a-f]+) .*\s" + name + r"$", syms, re.M).group(1), 16)
     img = bytearray((OUT / "text.bin").read_bytes())
-    # .ram_text, .c1_text and .data follow .text at their load addresses; crt0 / main copy them by words
-    for sect, lname in (("ramtext.bin", "_rt_load"), ("c1text.bin", "_c1_load"), ("data.bin", "_data_load")):
+    # RAM-resident code and .data follow .text at their load addresses; main copies them by words.
+    for sect, lname in (("ramtext.bin", "_rt_load"), ("fasttext.bin", "_fast_load"),
+                        ("c1text.bin", "_c1_load"), ("data.bin", "_data_load")):
         load = symv(lname)
         if load % 4:
             raise SystemExit(f"{lname} {load:#x} is not word aligned")
@@ -264,9 +267,10 @@ def check(img, syms, dis, rt):
         errors.append(f"_start is not at {APP_XIP:#x}")
     if img[:4] != bytes.fromhex("04818000"):
         errors.append(f"image starts with {img[:4].hex()}, not the entry stub")
-    # RAM code runs with the flash off: no calls into XIP. The second core's waiting loop (.c1_text) calls only its
-    # job, through the pointer core 0 handed it (a register: "call rN")
-    sect, rt_calls, c1_calls, c1_insns, rt_insns = None, [], [], 0, 0
+    # .ram_text runs with flash off, and the fast audio kernels are deliberately
+    # self-contained. The second-core waiting loop calls only the handed job.
+    sect, rt_calls, fast_calls, c1_calls = None, [], [], []
+    c1_insns = rt_insns = fast_insns = 0
     for ln in rt.splitlines():
         mm = re.match(r"^Disassembly of section (\S+):", ln)
         if mm:
@@ -278,6 +282,10 @@ def check(img, syms, dis, rt):
             c1_insns += 1
             if re.search(r"\bcall\b", ln) and not re.search(r"\bcall\s+r\d+\b", ln):
                 c1_calls.append(ln.strip())
+        elif sect == ".fast_text":
+            fast_insns += 1
+            if re.search(r"\bcall\b", ln):
+                fast_calls.append(ln.strip())
         else:
             rt_insns += 1
             if re.search(r"\bcall\b", ln):
@@ -286,6 +294,10 @@ def check(img, syms, dis, rt):
         errors.append(f".ram_text contains calls: {rt_calls[:3]}")
     else:
         notes.append(f".ram_text: {rt_insns} insns, no calls")
+    if fast_calls:
+        errors.append(f".fast_text contains calls: {fast_calls[:3]}")
+    else:
+        notes.append(f".fast_text: {fast_insns} insns, no calls")
     c1_syms = re.findall(r"\s(fm1_c1_\w+|_c1_ustack\w*|_c1_sstack\w*)$", syms, re.M)
     if not CPU2:                    # FELUCCA_CPU2=0: nothing of the second core (no stack, waiting loop, mailbox)
         if c1_insns or c1_syms:

@@ -54,10 +54,15 @@ typedef struct {
     uint32_t porta_left;
     uint32_t lfo_phase, lfo_random;
     uint32_t lfo_fade, lfo_fade_total;
+    uint32_t pm_depth;                          /* immutable patch values cached off the sample path */
+    uint16_t am_depth[4], fb_scale[4];
+    int16_t fb_macro;
+    uint16_t norm;
     uint16_t tail_left;
     uint8_t correction_left;
     uint8_t live, down, algorithm, transition_pending, ending;
     uint8_t peg_stage, peg_rising, lfo_sh_step;
+    uint8_t carriers, enable_mask, fb_type_mask, amd_mask, pmd_mask, peg_mask;
 } rdx_note_t;
 
 ENG_MEM_FITS("RDX", sizeof(rdx_note_t) * RDX_POLY);
@@ -73,6 +78,91 @@ static const uint8_t RDX_CARRIERS[12] = {
 static rdx_patch_t rdx_track_patch[NTRK][2];
 static volatile uint8_t rdx_track_sel[NTRK];
 static uint8_t rdx_track_slot[NTRK], rdx_track_custom, rdx_track_valid;
+/* Touch Wah has no touch strip on FM-1.  SELECT is its manual centre control;
+ * the audio envelope still supplies the touch-sensitive part of the sweep. */
+static volatile uint8_t rdx_touch_wah_pos[NTRK] = {64, 64, 64, 64};
+static const rdx_patch_t *rdx_track_get(uint32_t tr);
+/* MENU > SYSTEM > RDX TYPE.  Kept outside the settings byte because the
+ * engine is compiled before ui.c in Felucca's single translation unit. */
+static uint8_t rdx_type = 1u;                 /* OPTIMIZED is the default for a fresh or upgraded unit */
+static uint32_t rdx_type_get(void) { return rdx_type != 0u; }
+static void rdx_type_set(uint32_t type) { rdx_type = (uint8_t)!!type; }
+
+static uint32_t rdx_touch_wah_active(const track_t *t)
+{
+    const rdx_patch_t *p;
+    uint32_t tr;
+    if (t < &trk[0] || t >= &trk[NTRK] || t->eng_req != ENGI_RDX)
+        return 0;
+    tr = (uint32_t)(t - trk);
+    p = rdx_track_get(tr);
+    return p->common.effects[0][0] == 2u || p->common.effects[1][0] == 2u;
+}
+
+static uint32_t rdx_touch_wah_get(const track_t *t)
+{
+    uint32_t tr = t >= &trk[0] && t < &trk[NTRK] ? (uint32_t)(t - trk) : 0u;
+    return rdx_touch_wah_pos[tr];
+}
+
+static uint32_t rdx_touch_wah_turn(track_t *t, int32_t delta)
+{
+    uint32_t tr = t >= &trk[0] && t < &trk[NTRK] ? (uint32_t)(t - trk) : 0u;
+    rdx_touch_wah_pos[tr] = (uint8_t)clamp((int32_t)rdx_touch_wah_pos[tr] + delta, 0, 127);
+    return rdx_touch_wah_pos[tr];
+}
+
+/* A sound set is an independent, many-to-many view over the patch table.  A
+ * patch can occur in any number of set index arrays without copying its 150
+ * bytes.  Until set browsing is added, the first containing set is the name
+ * shown on HOME. */
+static const char *rdx_sound_set_name(uint32_t preset)
+{
+    uint32_t s, i;
+    for (s = 0; s < NELEM(RDX_SOUND_SETS); s++)
+        for (i = 0; i < RDX_SOUND_SETS[s].count; i++)
+            if (RDX_SOUND_SETS[s].preset[i] == preset)
+                return RDX_SOUND_SETS[s].name;
+    return "Unsorted";
+}
+
+static int rdx_preset_visible(uint32_t preset)
+{
+    uint32_t s, i;
+    for (s = 0; s < NELEM(RDX_SOUND_SETS); s++)
+        for (i = 0; i < RDX_SOUND_SETS[s].count; i++)
+            if (RDX_SOUND_SETS[s].preset[i] == preset)
+                return 1;
+    return 0;
+}
+
+static uint32_t rdx_visible_preset(uint32_t at)
+{
+    uint32_t i;
+    for (i = 0; i < RDX_NPATCHES; i++)
+        if (rdx_preset_visible(i) && !at--)
+            return i;
+    return RDX_SET_FACTORY[0];
+}
+
+static void rdx_note_cache(rdx_note_t *n)
+{
+    uint32_t k, alg = n->algorithm % 12u;
+    n->carriers = RDX_CARRIERS[alg];
+    n->norm = (uint16_t)(alg < 5u ? 32768u : alg < 8u ? 23170u : alg < 11u ? 18919u : 16384u);
+    n->pm_depth = RDX_PM_DEPTH_Q16[n->patch.common.lfo_pmd & 127u];
+    n->enable_mask = n->fb_type_mask = n->amd_mask = n->pmd_mask = n->peg_mask = 0u;
+    for (k = 0; k < 4u; k++) {
+        const rdx_op_param_t *p = &n->patch.op[k];
+        n->am_depth[k] = RDX_AM_DEPTH_Q15[p->lfo_amd & 127u];
+        n->enable_mask |= (uint8_t)(!!p->enable << k);
+        n->fb_type_mask |= (uint8_t)(!!p->fb_type << k);
+        n->amd_mask |= (uint8_t)(!!p->lfo_amd << k);
+        n->pmd_mask |= (uint8_t)(!!p->lfo_pmd_enable << k);
+        n->peg_mask |= (uint8_t)(!!p->peg_enable << k);
+    }
+    n->fb_macro = INT16_MIN;                    /* force the four feedback coefficients to be filled */
+}
 
 static uint32_t rdx_track_index(const track_t *t)
 {
@@ -145,8 +235,16 @@ static void rdx_track_loaded(track_t *t)
     if (t->eng_req != ENGI_RDX)
         return;
     tr = rdx_track_index(t);
-    slot = (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPRESETS - 1);
-    rdx_track_set(tr, (const rdx_patch_t *)RDX_FACTORY[slot].patch, 0);
+    slot = (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPATCHES - 1);
+    if (!rdx_preset_visible(slot)) {
+        slot = RDX_FIRST_VISIBLE;
+        t->p[P_E7] = (int16_t)slot;
+    }
+    /* Keep the generic preset id and RDX's PATCH parameter inseparable.  Old
+     * autosaves can contain values written by different RDX preset layouts;
+     * without this, HOME may name one voice while the engine loads another. */
+    t->preset = (uint8_t)slot;
+    rdx_track_set(tr, (const rdx_patch_t *)RDX_PATCHES[slot].patch, 0);
     rdx_track_slot[tr] = (uint8_t)slot;
     rdx_mode_apply(t, rdx_track_get(tr));
 }
@@ -157,6 +255,12 @@ static void rdx_track_loaded(track_t *t)
  * contain VOICE=POLY even when the RDX common block says MONO. */
 static void rdx_track_restored(track_t *t)
 {
+    uint32_t slot = t->preset;
+    /* A project stores both preset and P_E7.  The preset id is the sound the
+     * user selected; force PATCH to it before copying the current firmware's
+     * complete 150-byte factory/SysEx data. */
+    if (slot < RDX_NPATCHES && rdx_preset_visible(slot))
+        t->p[P_E7] = (int16_t)slot;
     rdx_track_loaded(t);
 }
 
@@ -171,12 +275,12 @@ static void rdx_patch_for_track(uint32_t tr, rdx_patch_t *out)
 {
     uint32_t slot;
     tr %= NTRK;
-    slot = (uint32_t)clamp(trk[tr].p[P_E7], 0, (int32_t)RDX_NPRESETS - 1);
+    slot = (uint32_t)clamp(trk[tr].p[P_E7], 0, (int32_t)RDX_NPATCHES - 1);
     if ((rdx_track_valid & (1u << tr)) &&
         ((rdx_track_custom & (1u << tr)) || rdx_track_slot[tr] == slot))
         memcpy(out, rdx_track_get(tr), sizeof *out);
     else
-        memcpy(out, RDX_FACTORY[slot].patch, sizeof *out);
+        memcpy(out, RDX_PATCHES[slot].patch, sizeof *out);
 }
 
 static rdx_note_t *rdx_note(track_t *t, voice_t *v)
@@ -489,11 +593,20 @@ static uint32_t rdx_op_inc(const rdx_op_param_t *p, uint32_t base_inc, int32_t r
     return inc;
 }
 
-static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel, int32_t level_macro,
+static uint32_t rdx_velocity_gain_q15(uint32_t vel_q8, uint32_t sens)
+{
+    uint32_t vi = vel_q8 >> 8, vf = vel_q8 & 255u;
+    uint32_t vr = RDX_VELOCITY_Q15[vi > 127u ? 127u : vi];
+    if (vi < 127u)
+        vr += ((uint32_t)(RDX_VELOCITY_Q15[vi + 1u] - vr) * vf + 128u) >> 8;
+    return (uint32_t)(((127u - sens) * 32768u + sens * vr) / 127u);
+}
+
+static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel_q8, int32_t level_macro,
                                 int32_t velocity_macro, uint32_t note)
 {
-    int32_t sens = clamp((int32_t)p->vel_sens + velocity_macro, 0, 127);
-    uint32_t vg = (uint32_t)(((127 - sens) * 32768 + sens * RDX_VELOCITY_Q15[vel & 127u]) / 127u);
+    uint32_t sens = (uint32_t)clamp((int32_t)p->vel_sens + velocity_macro, 0, 127);
+    uint32_t vg = rdx_velocity_gain_q15(vel_q8, sens);
     uint32_t level;
     vg = (vg * 35389u) >> 15;                       /* reference engine's 1.08 velocity headroom */
     level = (uint32_t)clamp((int32_t)p->out_level + level_macro, 0, 127);
@@ -512,8 +625,8 @@ static void rdx_note_on(track_t *t, voice_t *v)
 {
     rdx_note_t *n = rdx_note(t, v);
     const rdx_patch_t *p;
-    uint32_t slot = (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPRESETS - 1);
-    uint32_t k, carrier_index = 0, carriers, base_inc, vel;
+    uint32_t slot = (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPATCHES - 1);
+    uint32_t k, carrier_index = 0, carriers, base_inc, vel_q8;
     int32_t old_out, old_pitch;
     int was_live;
     if (!n)
@@ -527,12 +640,13 @@ static void rdx_note_on(track_t *t, voice_t *v)
          rdx_track_slot[rdx_track_index(t)] == slot))
         memcpy(&n->patch, rdx_track_get(rdx_track_index(t)), sizeof n->patch);
     else
-        memcpy(&n->patch, RDX_FACTORY[slot].patch, sizeof n->patch);
+        memcpy(&n->patch, RDX_PATCHES[slot].patch, sizeof n->patch);
     p = &n->patch;
     n->live = n->down = 1;
     n->last_out = old_out;
     n->transition_pending = (uint8_t)was_live;  /* retrigger/steal: join the old waveform */
     n->algorithm = (uint8_t)rdx_algorithm(t, p);
+    rdx_note_cache(n);
     n->base_pitch = ((int32_t)v->note + (int32_t)p->common.transpose - 64) * 65536;
     n->pitch_target = n->base_pitch;
     if ((was_live || old_pitch) && p->common.mono_poly == 1u && p->common.porta_time) {
@@ -548,7 +662,9 @@ static void rdx_note_on(track_t *t, voice_t *v)
     n->lfo_fade = p->common.lfo_delay ? 0u : 32768u;
     carriers = RDX_CARRIERS[n->algorithm];
     base_inc = pitch_inc(clamp((int32_t)v->note * 16 + ((int32_t)p->common.transpose - 64) * 16, 0, 2047));
-    vel = v->mvel ? v->mvel : v->vel;
+    vel_q8 = rdx_note_velocity_q8;
+    if (!vel_q8)
+        vel_q8 = (uint32_t)(v->mvel ? v->mvel : v->vel) << 8;
     for (k = 0; k < 4u; k++) {
         const rdx_op_param_t *q = &p->op[k];
         rdx_op_t *o = &n->op[k];
@@ -560,7 +676,7 @@ static void rdx_note_on(track_t *t, voice_t *v)
             spread = SPREAD[carrier_index++] * (int32_t)t->p[P_E6] * 12 / 127;
         }
         o->inc = rdx_op_inc(q, base_inc, ratio_macro, spread);
-        o->out_gain = rdx_output_gain(q, vel, level_macro, t->p[P_E5], v->note);
+        o->out_gain = rdx_output_gain(q, vel_q8, level_macro, t->p[P_E5], v->note);
         o->rate_offset = (uint8_t)rdx_rate_offset(v->note, q->rate_scaling);
         o->stage = RDX_ATTACK;
         o->target = RDX_ENV_TARGET_Q16[q->eg_level[0] & 127u];
@@ -638,7 +754,8 @@ static void rdx_force_stop(track_t *t, voice_t *v)
     n->tail_left = 256u;                              /* exactly eight 32-sample render blocks */
 }
 
-static void rdx_render(track_t *t, voice_t *v, int32_t *out, uint32_t len, const vmod_t *m)
+static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, int32_t *out,
+                                                        uint32_t len, const vmod_t *m)
 {
     rdx_note_t *n = rdx_note(t, v);
     const rdx_patch_t *p;
@@ -791,28 +908,29 @@ static void rdx_render(track_t *t, voice_t *v, int32_t *out, uint32_t len, const
     }
 }
 
+/* The A/B implementation keeps the original sample renderer above intact.
+ * It shares the same patch and per-note state but schedules each operator as
+ * one 32-sample block instead of making four function calls per sample. */
+#include "eng_rdx_opt.c"
+
+static void rdx_render(track_t *t, voice_t *v, int32_t *out, uint32_t len, const vmod_t *m)
+{
+    if (rdx_type_get())
+        rdx_render_optimized(t, v, out, len, m);
+    else
+        rdx_render_origin(t, v, out, len, m);
+}
+
 static const char *const N_RDX_ALG[] = {
     "PAT", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", 0
 };
-static const char *const N_RDX_PATCH[] = {
-    RDX_FACTORY[0].name, RDX_FACTORY[1].name, RDX_FACTORY[2].name, RDX_FACTORY[3].name,
-    RDX_FACTORY[4].name, RDX_FACTORY[5].name, RDX_FACTORY[6].name, RDX_FACTORY[7].name,
-    RDX_FACTORY[8].name, RDX_FACTORY[9].name, RDX_FACTORY[10].name, RDX_FACTORY[11].name,
-    RDX_FACTORY[12].name, RDX_FACTORY[13].name, RDX_FACTORY[14].name, RDX_FACTORY[15].name,
-    RDX_FACTORY[16].name, RDX_FACTORY[17].name, RDX_FACTORY[18].name, RDX_FACTORY[19].name,
-    RDX_FACTORY[20].name, RDX_FACTORY[21].name, RDX_FACTORY[22].name, RDX_FACTORY[23].name,
-    RDX_FACTORY[24].name, RDX_FACTORY[25].name, RDX_FACTORY[26].name, RDX_FACTORY[27].name,
-    RDX_FACTORY[28].name, RDX_FACTORY[29].name, RDX_FACTORY[30].name, RDX_FACTORY[31].name,
-    RDX_FACTORY[32].name, RDX_FACTORY[33].name, RDX_FACTORY[34].name, 0
-};
+#define RDX_NAME(I) RDX_PATCHES[(I)].name,
+static const char *const N_RDX_PATCH[] = { RDX_FOR_EACH_PATCH(RDX_NAME) 0 };
+#undef RDX_NAME
 
-#define RDX_PR(I) {RDX_FACTORY[(I)].name, {0, 0, 0, 0, 0, 0, 0, (I)}, {0, 0, 127, 0}, 0, 0, FX(0, 20, 20, 24)}
+#define RDX_PR(I) {RDX_PATCHES[(I)].name, {0, 0, 0, 0, 0, 0, 0, (I)}, {0, 0, 127, 0}, 0, 0, FX(0, 0, 0, 0)},
 static const preset_t RDX_PRESETS[] = {
-    RDX_PR(0), RDX_PR(1), RDX_PR(2), RDX_PR(3), RDX_PR(4), RDX_PR(5), RDX_PR(6),
-    RDX_PR(7), RDX_PR(8), RDX_PR(9), RDX_PR(10), RDX_PR(11), RDX_PR(12), RDX_PR(13),
-    RDX_PR(14), RDX_PR(15), RDX_PR(16), RDX_PR(17), RDX_PR(18), RDX_PR(19), RDX_PR(20),
-    RDX_PR(21), RDX_PR(22), RDX_PR(23), RDX_PR(24), RDX_PR(25), RDX_PR(26), RDX_PR(27),
-    RDX_PR(28), RDX_PR(29), RDX_PR(30), RDX_PR(31), RDX_PR(32), RDX_PR(33), RDX_PR(34)
+    RDX_FOR_EACH_PATCH(RDX_PR)
 };
 #undef RDX_PR
 
@@ -827,7 +945,7 @@ static const engine_t ENG_RDX = {
         {"MEG", F_BIPCT, -64, 63, 0, 0, 0},
         {"VELO", F_BIPCT, -64, 63, 0, 0, 0},
         {"DTUN", F_PCT, 0, 127, 0, 0, 0},
-        {"PATCH", F_ENUM, 0, RDX_NPRESETS - 1, 0, N_RDX_PATCH, 0},
+        {"PATCH", F_ENUM, RDX_FIRST_VISIBLE, RDX_NPATCHES - 1, RDX_FIRST_VISIBLE, N_RDX_PATCH, 0},
     },
     .presets = RDX_PRESETS,
     .npresets = NELEM(RDX_PRESETS),

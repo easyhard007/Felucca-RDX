@@ -29,6 +29,13 @@ static struct {
     volatile uint8_t late_source;
 } audio_timing;
 
+/* Pure RDX voice-render work in the current audio half.  Core0 and Core1
+ * write separate counters, then fx.c combines them into a per-voice time. */
+#if FELUCCA_RDX
+static volatile uint32_t rdx_voice_ticks_c0, rdx_voice_ticks_c1;
+static volatile uint16_t rdx_voice_calls_c0, rdx_voice_calls_c1;
+#endif
+
 #if FELUCCA_RDX && defined(FM1_TICKS_PER_US)
 #define AUDIO_TIMING_ON 1
 #define AUDIO_TIME_START(name) uint32_t name = fm1_ticks()
@@ -335,7 +342,7 @@ static void glide_set(track_t *t, voice_t *v, int glide)
     }
 }
 
-static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int glide)
+static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, uint32_t vel_q8, int glide)
 {
     const engine_t *e = ENGINES[t->engine];
     int sounding = v->active && v->stage != 0;
@@ -359,6 +366,11 @@ static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int
         v->side = t->sp_alt;                            /* SPREAD: left, right, left .. (UNISON: mono_play); a */
         t->sp_alt ^= 1u;                                /* sounding voice keeps its side (no jump) */
     }                                                   /* sounding: the attack starts from the current level */
+#if FELUCCA_RDX
+    rdx_note_velocity_q8 = (uint16_t)clamp((int32_t)vel_q8, 0, 127 << 8);
+#else
+    (void)vel_q8;
+#endif
     e->note_on(t, v);
     if (sounding && !e->sampled) {                     /* retrigger / steal: keep phases and filter */
         v->ph[0] = ph0;                                 /* states (resetting them clicks) */
@@ -381,7 +393,7 @@ static void voice_start(track_t *t, voice_t *v, uint32_t note, uint32_t vel, int
 
 /* MONO / LEGATO / UNISON: one note on one voice (eight for UNISON, or the
  * engine's voice cap, spread by DETUNE over the same width) */
-static void mono_play(track_t *t, uint32_t note, uint32_t vel, int retrig, int glide)
+static void mono_play(track_t *t, uint32_t note, uint32_t vel, uint32_t vel_q8, int retrig, int glide)
 {
     uint32_t mode = (uint32_t)t->p[P_VOICE], nv = mode == V_UNISON ? trk_unison_voices(t) : 1u, i;
     for (i = 0; i < nv; i++) {
@@ -394,7 +406,8 @@ static void mono_play(track_t *t, uint32_t note, uint32_t vel, int retrig, int g
             if ((!v->active || v->stage == 4u) && !voice_room(t, i > 0))
                 continue;                                   /* no room for this extra UNISON voice */
             /* level: about the same sum for 8 or 4 voices at random phases */
-            voice_start(t, v, note, nv >= NVOICE ? vel * 36u / 100u : nv > 1u ? vel / 2u : vel, glide);
+            uint32_t scale = nv >= NVOICE ? 36u : nv > 1u ? 50u : 100u;
+            voice_start(t, v, note, vel * scale / 100u, vel_q8 * scale / 100u, glide);
             v->side = (uint8_t)(i & 1u);                    /* SPREAD: the detuned voices alternate */
             if (nv > 1u && i && !ENGINES[t->engine]->sampled) {   /* random start phases: */
                 static uint32_t seed = 0x1234567u;          /* in phase they stack, evenly spread they cancel */
@@ -445,9 +458,9 @@ static void mono_remove(track_t *t, uint32_t note)
     t->nmono = (uint8_t)k;
 }
 
-static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
+static void trk_note_on_q8(track_t *t, uint32_t note, uint32_t vel, uint32_t vel_q8)
 {
-    uint32_t any = 0, i, mode = trk_vmode(t);
+    uint32_t any = 0, i, mode = trk_vmode(t), vel_in = vel;
     if (t->p[P_MUTE])
         return;
     if (t->xf_on || t->eng_req != t->engine) {          /* engine switch under way: after the fade */
@@ -468,6 +481,7 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
     }
 #endif
     vel = mod_note(t, note, vel);                       /* the matrix's VEL / KEY / RAND (1.5.6: VEL as a destination) */
+    vel_q8 = (uint32_t)clamp((int32_t)vel_q8 + ((int32_t)vel - (int32_t)vel_in) * 256, 0, 127 << 8);
     for (i = 0; i < NVOICE; i++)
         any |= t->v[i].gate;
     if (!any) {                                        /* fresh phrase: LFO retrigger (TRIG NOTE) and fade */
@@ -480,7 +494,7 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
         t->nmono = 0;                                   /* no stale mono stack after a mode change */
         t->mono_note = 0;
         v->fine = 0;
-        voice_start(t, v, note, vel,
+        voice_start(t, v, note, vel, vel_q8,
 #if FELUCCA_RDX
                     t->engine != ENGI_RDX &&
 #endif
@@ -498,14 +512,19 @@ static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
             return;                                     /* LOW / HIGH priority: this key does not win */
 #if FELUCCA_RDX
         if (t->engine == ENGI_RDX)                      /* both Reface mono modes share one live voice; its patch */
-            mono_play(t, want, vel, !sounding, 0);      /* decides FULL vs LEGATO portamento internally */
+            mono_play(t, want, vel, vel_q8, !sounding, 0);   /* decides FULL vs LEGATO portamento internally */
         else
 #endif
         if (mode == V_MONO)                             /* MONO: always retrigger, glide when GLIDE is set */
-            mono_play(t, want, vel, 1, t->p[P_GLIDE] != 0 || t->slide_glide);
+            mono_play(t, want, vel, vel_q8, 1, t->p[P_GLIDE] != 0 || t->slide_glide);
         else                                            /* LEGATO / UNISON: glide only between held notes */
-            mono_play(t, want, vel, !sounding, sounding && (t->p[P_GLIDE] != 0 || t->slide_glide));
+            mono_play(t, want, vel, vel_q8, !sounding, sounding && (t->p[P_GLIDE] != 0 || t->slide_glide));
     }
+}
+
+static void trk_note_on(track_t *t, uint32_t note, uint32_t vel)
+{
+    trk_note_on_q8(t, note, vel, vel << 8);
 }
 
 static void trk_note_off(track_t *t, uint32_t note)
@@ -523,7 +542,7 @@ static void trk_note_off(track_t *t, uint32_t note)
         if (t->mono_note == note) {
             uint32_t next = mono_pick(t);
             if (next) {                                 /* fall back to a held note, legato */
-                mono_play(t, next, t->v[0].vel, 0,
+                mono_play(t, next, t->v[0].vel, (uint32_t)t->v[0].vel << 8, 0,
 #if FELUCCA_RDX
                           t->engine != ENGI_RDX &&
 #endif
@@ -831,17 +850,46 @@ static void rdx_c1_voices(uint32_t unused)
 {
     rdx_c1_voice_job_t *j = &rdx_c1_voice_job;
     const engine_t *e = ENGINES[j->t->engine];
-    uint32_t i, t0 = C1_TICKS();
+    uint32_t i, calls = 0, t0 = C1_TICKS(), tv;
     (void)unused;
     for (i = 0; i < j->n; i++)
         rdx_c1_voice_out[i] = rdx_c1_voice_spread[i] = 0;
+    tv = C1_TICKS();
     for (i = 0; i < NVOICE; i++)
         if ((j->mask >> i) & 1u) {
             voice_t *v = &j->t->v[i];
             e->render(j->t, v, j->spread && !v->side ? rdx_c1_voice_spread : rdx_c1_voice_out,
                       j->n, &j->mod[i]);
+            calls++;
         }
+    rdx_voice_ticks_c1 += C1_TICKS() - tv;
+    rdx_voice_calls_c1 += (uint16_t)calls;
     c1_half_ticks += C1_TICKS() - t0;
+}
+
+static void rdx_render_serial(track_t *t, const engine_t *e, int32_t *out, uint32_t n, uint32_t valid)
+{
+    uint32_t i, calls = 0;
+#if AUDIO_TIMING_ON
+    uint32_t t0 = fm1_ticks();
+#endif
+    for (i = 0; i < NVOICE; i++)
+        if ((valid >> i) & 1u) {
+            voice_t *v = &t->v[i];
+            e->render(t, v, T_SPREAD(t) > v->side ? SPREAD_BUF(t) : out, n,
+                      &rdx_c1_voice_job.mod[i]);
+            calls++;
+        }
+#if AUDIO_TIMING_ON
+    {
+        uint32_t ticks = fm1_ticks() - t0;
+        audio_timing.cur.c0_fm += ticks;
+        rdx_voice_ticks_c0 += ticks;
+        rdx_voice_calls_c0 += (uint16_t)calls;
+    }
+#else
+    (void)calls;
+#endif
 }
 
 /* Split the active voices of one RDX Part between both cores.  Control state
@@ -851,7 +899,7 @@ static void rdx_c1_voices(uint32_t unused)
 static void rdx_render_parallel(track_t *t, const engine_t *e, int32_t *out, uint32_t n,
                                 uint32_t valid, uint32_t nr)
 {
-    uint32_t i, saved = 0, need = rdx_c1_voice_count(nr), c1mask = 0;
+    uint32_t i, calls = 0, saved = 0, need = rdx_c1_voice_count(nr), c1mask = 0;
     int handed;
     AUDIO_TIME_START(t_xfer0);
     for (i = 0; i < NVOICE && need; i++)
@@ -873,8 +921,18 @@ static void rdx_render_parallel(track_t *t, const engine_t *e, int32_t *out, uin
         if (((valid & ~c1mask) >> i) & 1u) {
             voice_t *v = &t->v[i];
             e->render(t, v, T_SPREAD(t) > v->side ? SPREAD_BUF(t) : out, n, &rdx_c1_voice_job.mod[i]);
+            calls++;
         }
+#if AUDIO_TIMING_ON
+    {
+        uint32_t ticks = fm1_ticks() - t_c0fm;
+        audio_timing.cur.c0_fm += ticks;
+        rdx_voice_ticks_c0 += ticks;
+        rdx_voice_calls_c0 += (uint16_t)calls;
+    }
+#else
     AUDIO_TIME_ADD(c0_fm, t_c0fm);
+#endif
     if (handed) {
         if (C1_WAIT()) {
             /* C1_WAIT has held the failed core. Discard its private output
@@ -884,13 +942,24 @@ static void rdx_render_parallel(track_t *t, const engine_t *e, int32_t *out, uin
                 if ((c1mask >> i) & 1u)
                     *rdx_note(t, &t->v[i]) = rdx_c1_before[saved++];
             AUDIO_TIME_START(t_recover);
+            calls = 0;
             for (i = 0; i < NVOICE; i++)
                 if ((c1mask >> i) & 1u) {
                     voice_t *v = &t->v[i];
                     e->render(t, v, T_SPREAD(t) > v->side ? SPREAD_BUF(t) : out, n,
                               &rdx_c1_voice_job.mod[i]);
+                    calls++;
                 }
+#if AUDIO_TIMING_ON
+            {
+                uint32_t ticks = fm1_ticks() - t_recover;
+                audio_timing.cur.c0_fm += ticks;
+                rdx_voice_ticks_c0 += ticks;
+                rdx_voice_calls_c0 += (uint16_t)calls;
+            }
+#else
             AUDIO_TIME_ADD(c0_fm, t_recover);
+#endif
         } else {
             AUDIO_TIME_START(t_merge);
             for (i = 0; i < n; i++) {
@@ -956,7 +1025,7 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
     ctl.bend_fine = bend_fine;
     ctl.fade = fade;
 #if FELUCCA_RDX && FELUCCA_CPU2
-    if (e == &ENG_RDX && C1_ON() && !c1_inside_part_job && !c1_outer_active) {
+    if (e == &ENG_RDX && !c1_inside_part_job && !c1_outer_active) {
         uint32_t valid = 0;
         AUDIO_TIME_START(t_ctl);
         for (i = 0; i < NVOICE; i++)
@@ -965,7 +1034,10 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
                 nr++;
             }
         AUDIO_TIME_ADD(rdx_ctl, t_ctl);
-        rdx_render_parallel(t, e, out, n, valid, nr);
+        if (C1_ON())
+            rdx_render_parallel(t, e, out, n, valid, nr);
+        else
+            rdx_render_serial(t, e, out, n, valid);
     } else
 #endif
     for (i = 0; i < NVOICE; i++) {

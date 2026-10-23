@@ -46,7 +46,11 @@
 #define FM1_CPU1_USED FELUCCA_CPU2   /* hal/fm1_sys.h: the second core is built in; every reset holds it first (its
                                       * waiting loop is in RAM the ROM and the SPL use at boot) */
 #ifndef FELUCCA_VERSION
-#define FELUCCA_VERSION "v1.6.1" /* shown in the menu, the console and the editor; build.py --release X.Y */
+#if FELUCCA_RDX
+#define FELUCCA_VERSION "RDX 0.5" /* splash: "Felucca" / "RDX 0.5"; menu, console and editor too */
+#else
+#define FELUCCA_VERSION "v1.6.1"  /* shown in the menu, the console and the editor; build.py --release X.Y */
+#endif
 #endif
 #if FELUCCA_OTA && !FELUCCA_FLASH
 #error "FELUCCA_OTA needs FELUCCA_FLASH"

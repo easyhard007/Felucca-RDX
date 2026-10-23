@@ -19,6 +19,49 @@ static uint8_t midi_sel_on[16][128];
 static uint16_t midi_owners[NTRK];           /* avoids rescanning all 2048 entries for CC123 */
 #define MIDI_PEDAL_NOTE 0x80u
 
+/* MENU > SYSTEM > VEL CURVE.  The order follows Yamaha's five-level touch
+ * setting.  Only received MIDI Note On velocity is mapped; panel keys and the
+ * sequencer keep their explicitly selected/stored velocities. */
+enum { VEL_SOFT2, VEL_SOFT1, VEL_MEDIUM, VEL_HARD1, VEL_HARD2, VEL_CURVE_N };
+static uint8_t midi_vel_curve = VEL_HARD1;
+
+/* Curves are evaluated in Q8.8. MIDI 1.0 still supplies 127 input values,
+ * but retaining the fractional result prevents a second 7-bit quantisation
+ * before RDX applies its nonlinear velocity response. */
+static uint32_t velocity_hard2_q8(uint32_t v)
+{
+    return (v * v * 256u + 63u) / 127u;
+}
+
+static uint32_t velocity_hard1_q8(uint32_t v)
+{
+    return (v * 256u + velocity_hard2_q8(v) + 1u) >> 1;
+}
+
+static uint32_t midi_velocity_map_q8(uint32_t v)
+{
+    v = (uint32_t)clamp((int32_t)v, 1, 127);
+    switch (midi_vel_curve) {
+    case VEL_SOFT2: return 127u * 256u - velocity_hard2_q8(127u - v);
+    case VEL_SOFT1: return 127u * 256u - velocity_hard1_q8(127u - v);
+    case VEL_MEDIUM: return v * 256u;
+    case VEL_HARD2: return velocity_hard2_q8(v);
+    default: return velocity_hard1_q8(v);
+    }
+}
+
+static uint32_t midi_velocity_map(uint32_t v)
+{
+    return (uint32_t)clamp((int32_t)((midi_velocity_map_q8(v) + 128u) >> 8), 1, 127);
+}
+
+static void midi_velocity_curve_set(uint32_t curve)
+{
+    midi_vel_curve = (uint8_t)(curve < VEL_CURVE_N ? curve : VEL_HARD1);
+}
+
+static uint32_t midi_velocity_curve_get(void) { return midi_vel_curve; }
+
 static midi_channel_t *midi_channel(uint32_t ch)
 {
     midi_channel_t *c = &midi_ch[ch];
@@ -101,7 +144,7 @@ static void midi_release(uint32_t ch, uint32_t note)
 
 /* a MIDI note-on (ch, note) of track t: its chord (chord.c) or the note alone. A note another key or MIDI
  * note holds already sounds: not started again */
-static void midi_play(track_t *t, uint32_t ch, uint32_t note, uint32_t vel)
+static void midi_play(track_t *t, uint32_t ch, uint32_t note, uint32_t vel, uint32_t vel_q8)
 {
     uint8_t nn[CHORD_MAX];
     uint32_t n = chord_build(t, note, nn), i, f = 0;
@@ -114,7 +157,7 @@ static void midi_play(track_t *t, uint32_t ch, uint32_t note, uint32_t vel)
     }
     for (i = 0; i < n; i++)
         if (!midi_note_held(t, nn[i]) && !midi_local_held(t, nn[i]))
-            input_on(t, nn[i], vel);
+            input_on_q8(t, nn[i], vel, vel_q8);
     if (n > 1u || nn[0] != note) {
         mchord_t *m = &mchord[f];
         m->ch = (uint8_t)ch;
@@ -132,6 +175,8 @@ static void midi_note_event(uint32_t ch, uint32_t note, uint32_t vel)
     uint32_t id = midi_notes[ch][note] & 0x7Fu;
     if (vel) {
         track_t *t = midi_track(ch);
+        uint32_t vel_q8 = midi_velocity_map_q8(vel);
+        vel = (uint32_t)clamp((int32_t)((vel_q8 + 128u) >> 8), 1, 127);
         /* Repeated notes replace the previous press, including a pedal-held one. */
         if (id)
             midi_release(ch, note);
@@ -140,7 +185,7 @@ static void midi_note_event(uint32_t ch, uint32_t note, uint32_t vel)
             midi_hint = (uint8_t)(trk_index(t) + 1u);
         midi_seen |= (uint8_t)(1u << trk_index(t));   /* (1.5.5: only noted; the UI does the rest) */
         c->targets |= (uint8_t)(1u << trk_index(t));
-        midi_play(t, ch, note, vel);
+        midi_play(t, ch, note, vel, vel_q8);
         midi_notes[ch][note] = (uint8_t)(trk_index(t) + 1u);
         midi_owners[trk_index(t)]++;
         c->owned[trk_index(t)]++;

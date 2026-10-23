@@ -1762,7 +1762,12 @@ static void ui_input(void)
     if (!lay && (s = panel_enc(EN_ALGO)) != 0)     /* ALGORITHM: the selected track, on every page */
         track_select((uint32_t)clamp((int32_t)song.sel + (s > 0 ? 1 : -1), 0, NTRK - 1));
     if ((s = glo ? sel : panel_enc(EN_SELECT)) != 0) {   /* SELECT knob = global tempo; */
-        if (!glo && sel_mode() >= SEL_MODW) {         /* MENU > SELECT MODW / VEL (1.5.6, #84): it plays */
+        if (!glo && rdx_touch_wah_active(TSEL)) {
+            char b[8];
+            uint32_t v = rdx_touch_wah_turn(TSEL, accel(EN_SELECT, s, 127));
+            fmt_int(b, (int32_t)v);
+            ui_say("WAH ", b);
+        } else if (!glo && sel_mode() >= SEL_MODW) {  /* MENU > SELECT MODW / VEL (1.5.6, #84): it plays */
             sel_play(sel_mode(), s);
         } else if (!glo && sel_mode() == SEL_PAGE) {   /* MENU > SELECT PAGE (1.5.5, #188): the pages, a detent
                                                          * each (ui.c page_turn); the tempo is GLO + SELECT, CLOCK's
