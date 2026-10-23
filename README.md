@@ -1,43 +1,50 @@
-# Felucca
+# Felucca RDX for M-VAVE FM-1
 
-[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
+Felucca RDX is dedicated firmware that turns the M-VAVE FM-1 into an
+eight-voice, four-operator synthesizer inspired by the Yamaha reface DX. It is
+based on the open-source Felucca firmware, but the product UI exposes only the
+RDX instrument and its sound sets.
 
-## Maintenance Notice
+Current features include:
 
-What began as a personal experiment grew far beyond my expectations. I’m grateful to everyone who contributed, supported the project, and made music with Felucca.
+- 12 four-operator FM algorithms and an optimized fixed-point renderer;
+- Yamaha reface DX envelopes, Pitch EG, LFO, keyboard scaling, mono/legato and
+  portamento behaviour;
+- Factory and Selected sound sets, including imported reface DX SysEx voices;
+- dual-core voice rendering with detailed timing and AUDIO LATE diagnostics;
+- an `FX1 -> FX2` serial stereo effects chain;
+- native Felucca Chorus, Delay and Hall algorithms;
+- fixed-point PicoFaceDX Phaser-RDX and Flanger-RDX algorithms, with the
+  original Felucca models retained for A/B comparison;
+- five MIDI velocity curves with Q8.8 velocity inside the RDX engine.
 
-I’ve decided to step back from active development to focus on creating new instruments and music.
+The primary build output is `build/felucca.fwsc`. It can be loaded by the
+[FM-1 emulator](https://joakimeriksson.github.io/fm1-emu/?fw=local&mhz=100)
+or installed on an FM-1 through the generated local Web MIDI installer.
 
-Felucca will remain available with occasional maintenance, but new features, issue responses, and pull request reviews are not guaranteed.
+See [GUIDE.md](GUIDE.md) for the build, simulator and installation workflow.
 
-Thank you for everything. I hope you’ll look forward to my next creations.
+## Build
 
-## Overview
+From PowerShell:
 
-Multi-engine synthesizer firmware for the M-VAVE FM-1, version 1.6.1. Connect the FM-1 to a computer by USB, open the
-[web installer](https://hugelton.github.io/Felucca/) in Chrome or Edge and press Install; no extra hardware is needed.
-Installing is at your own risk: M-VAVE's updater or the installer's **Return to official V15** takes you back.
-[Try it in your browser](https://hugelton.github.io/Felucca/webapp/try/), no FM-1 needed.
+```powershell
+cd E:\Projects\fm1\RDX
+.\build-rdx.ps1
+```
 
-- Install: [web installer](https://hugelton.github.io/Felucca/)
-- Edit: [web editor](https://hugelton.github.io/Felucca/webapp/editor/) ([Felucca-WebApp](https://github.com/hugelton/Felucca-WebApp))
-- Read: the manual and the release notes are in the [wiki](https://github.com/hugelton/Felucca/wiki/Home)
-- Build: [BUILDING.md](BUILDING.md)
-- Related: [Felucca-Engines](https://github.com/hugelton/Felucca-Engines) (the ANALOG, LOFI, TRIO, WHEEL and NOISE engines, MIT; still maintained) ·
-  [felucca-bsp](https://github.com/hugelton/felucca-bsp) (the FM-1 hardware layer)
+The default build enables both CPU cores. Use `-Cpu2 0` only when producing a
+single-core diagnostic build.
 
-## AI disclaimer
+## Source and licences
 
-Felucca is developed with the assistance of AI coding agents (code, tests, documentation, translation, maintenance). The
-design, features, sound design and direction are the maintainer's or the community's, and no generative AI is used for music,
-icons or artwork. See [On AI-Assisted Development and Responsibility](https://github.com/hugelton/Felucca/discussions/166).
+This repository retains parts of upstream Felucca that are still required for
+file-format compatibility, build generation and regression tests. Legacy FM6
+source filenames therefore do not imply that FM6 is exposed as a selectable
+instrument in the RDX firmware.
 
-## Credits and licence
+Felucca RDX is GPL-3.0-only. Bundled and ported components keep their original
+licences; see [LICENSING.md](LICENSING.md) and [LICENSES](LICENSES/).
 
-Free software: [GPL-3.0-only](LICENSE); the Hügelton Sample Pack is CC0 1.0; the engines in `firmware/engines` are MIT
-([Felucca-Engines](https://github.com/hugelton/Felucca-Engines)); the bundled fonts and ported DSP keep their own licences
-([LICENSES/](LICENSES/), [LICENSING.md](LICENSING.md)). Thanks to everyone whose work and contributions are in it: [CREDITS.md](CREDITS.md).
-
-M-VAVE and FM-1 are trademarks of their respective owners. Felucca is not affiliated with or endorsed by them.
-
-Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
+M-VAVE, FM-1, Yamaha and reface DX are trademarks of their respective owners.
+This project is not affiliated with or endorsed by them.

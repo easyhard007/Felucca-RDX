@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * The Reface DX has two mono effect slots.  This file is included by fx.c
+ * The Reface DX has two serial effect slots.  This file is included by fx.c
  * after Felucca's INSERT implementation, so its inexpensive fixed-point drive,
  * phaser and flanger building blocks can be shared.  Chorus and Reverb take
  * sends at their slot positions into Felucca's native parallel buses.
@@ -8,9 +8,10 @@
  * 65536-sample line.  A Reface DX is monotimbral, so one sounding RDX Part owns
  * that line at a time; this preserves the full 1.486 s range and the serial
  * FX1 -> FX2 position without the dull FS / 8 approximation.  Chorus and HALL
- * also keep Felucca's native kernels, but their wet returns are mixed back into
- * the mono signal at each slot, so the next slot receives dry + wet.  HALL's
- * stereo difference is retained when Reverb is the final active slot. */
+ * also keep Felucca's native kernels.  The chain itself is stereo: the mono FM
+ * mix is duplicated at its input, every slot receives both channels from the
+ * preceding slot, and HALL's native mid/side return is reconstructed before
+ * FX2 instead of discarding its width there. */
 #if FELUCCA_RDX
 
 enum {
@@ -19,8 +20,19 @@ enum {
 };
 
 #define RFX_NSLOT (NTRK * 2u)
-#define RFX_DLY_MASK (DLY_LEN - 1u)
-_Static_assert((DLY_LEN & RFX_DLY_MASK) == 0u, "RDX delay line must be a power of two");
+/* RDX's measured Delay table tops out at 52964 samples.  The unused end of
+ * Felucca's 65536-sample line hosts the two physical slots' PicoFace stereo
+ * modulation lines, avoiding another large SRAM allocation. */
+#define RFX_PF_FL_LEN 512u
+#define RFX_PF_FL_MASK (RFX_PF_FL_LEN - 1u)
+#define RFX_PF_PH_LEN 2048u
+#define RFX_PF_PH_MASK (RFX_PF_PH_LEN - 1u)
+#define RFX_PF_PH_WORDS (2u * 2u * RFX_PF_PH_LEN)
+#define RFX_PF_FL_WORDS (2u * 2u * RFX_PF_FL_LEN)
+#define RFX_DLY_LEN (DLY_LEN - RFX_PF_PH_WORDS - RFX_PF_FL_WORDS)
+#define RFX_PF_PH_LINE(slot, ch) (&dly_buf[RFX_DLY_LEN + (((slot) & 1u) * 2u + ((ch) & 1u)) * RFX_PF_PH_LEN])
+#define RFX_PF_FL_LINE(slot, ch) (&dly_buf[RFX_DLY_LEN + RFX_PF_PH_WORDS + (((slot) & 1u) * 2u + ((ch) & 1u)) * RFX_PF_FL_LEN])
+_Static_assert(RFX_DLY_LEN > 52964u, "RDX Delay and PicoFace modulation lines overlap");
 
 /* Tenths of a millisecond.  This is the published community measurement of
  * all 128 Reface DX Delay TIME positions, rather than a guessed curve. */
@@ -36,13 +48,16 @@ static const uint16_t RFX_DELAY_T10[128] = {
 };
 
 typedef struct {
-    ins_t ins;                              /* Felucca drive / swept-effect state */
-    int32_t wah_env, wah_ic1, wah_ic2;
+    ins_t ins[2];                           /* independent L/R drive / swept states */
+    int32_t wah_env[2], wah_ic1[2], wah_ic2[2];
     int32_t ds_acc, ds_out, ds_target, ds_lp;
-    uint32_t dist_gain_q16;
+    uint32_t dist_gain_q16[2];
+    uint32_t pf_ph, pf_aux_ph;              /* PicoFace phaser and its short-delay LFO */
+    uint32_t pf_alpha[2];                   /* two all-pass coefficients, Q16 */
+    uint16_t pf_fl_wp, pf_fl_fill, pf_ph_wp, pf_ph_fill;
     uint16_t ds_wp, ds_fill;
     uint8_t ds_phase;
-    uint8_t type, p1, p2, valid;
+    uint8_t type, p1, p2, model, valid;
 } rdx_fx_slot_t;
 
 typedef struct {
@@ -53,8 +68,11 @@ typedef struct {
 static rdx_fx_track_t rdx_fx[NTRK] __attribute__((section(".pool")));
 static uint8_t rfx_delay_owner = 0xFFu;       /* full-rate dly_buf owner: track * 2 + slot */
 static struct {
-    int32_t in[CTL], wet[CTL], side[CTL];
+    int32_t l[CTL], r[CTL], in[CTL], wet[CTL], side[CTL];
 } rfx_work __attribute__((section(".pool")));
+
+/* The lines above use quarter-scale int16 storage: one eighth of PicoFace's
+ * float scratch footprint while retaining the original delay ranges. */
 #if defined(__EMSCRIPTEN__)
 static uint8_t rdx_fx_test_bypass;                     /* engine-only browser regression */
 #endif
@@ -64,15 +82,16 @@ static uint32_t rfx_slot_index(const track_t *t, uint32_t slot)
     return ((uint32_t)(t - trk) % NTRK) * 2u + (slot & 1u);
 }
 
-static uint32_t rfx_slot_set(rdx_fx_slot_t *s, uint32_t type, uint32_t p1, uint32_t p2)
+static uint32_t rfx_slot_set(rdx_fx_slot_t *s, uint32_t type, uint32_t p1, uint32_t p2, uint32_t model)
 {
-    if (s->valid && s->type == type && s->p1 == p1 && s->p2 == p2)
+    if (s->valid && s->type == type && s->p1 == p1 && s->p2 == p2 && s->model == model)
         return 0u;
     memset(s, 0, sizeof *s);
     s->valid = 1;
     s->type = (uint8_t)type;
     s->p1 = (uint8_t)p1;
     s->p2 = (uint8_t)p2;
+    s->model = (uint8_t)model;
     return 1u;
 }
 
@@ -132,17 +151,18 @@ static inline int32_t rfx_dist_cubic(int32_t x)
  * 50/50 wet/dry blend and one-pole tone.  A slow block-level compensation
  * replaces PicoFaceDX's faulty fixed 0.4 multiplier: it preserves the input's
  * mean absolute level, then applies the deliberate 1.00 .. 1.30 level curve. */
-static __attribute__((noinline)) void rfx_dist(rdx_fx_slot_t *s, int32_t *b, uint32_t n)
+static __attribute__((noinline)) void rfx_dist(rdx_fx_slot_t *s, int32_t *b, uint32_t n, uint32_t ch)
 {
     uint32_t i;
     uint32_t in_level = 0, out_level = 0;
+    ins_t *q = &s->ins[ch & 1u];
     int32_t g = (int32_t)rfx_dist_drive_q12(s->p1);
     uint32_t tone = RFX_DIST_TONE_Q16[s->p2 & 127u];
     uint32_t target = rfx_dist_target_q16(s->p1), gain;
     int32_t xmax = (32768 * 4096) / g;
 
     if (!s->p1) {                                      /* DRIVE 0: exact dry bypass */
-        s->dist_gain_q16 = 65536u;
+        s->dist_gain_q16[ch & 1u] = 65536u;
         return;
     }
     for (i = 0; i < n; i++) {
@@ -151,8 +171,8 @@ static __attribute__((noinline)) void rfx_dist(rdx_fx_slot_t *s, int32_t *b, uin
         int32_t wet = rfx_dist_cubic(driven);
         int32_t mixed = (wet + dry) >> 1;               /* PicoFaceDX dryMix_ = 0.5 */
         in_level += (uint32_t)(dry < 0 ? -dry : dry);
-        s->ins.lp1 += mulq16(mixed - s->ins.lp1, tone);
-        b[i] = s->ins.lp1;
+        q->lp1 += mulq16(mixed - q->lp1, tone);
+        b[i] = q->lp1;
         out_level += (uint32_t)(b[i] < 0 ? -b[i] : b[i]);
     }
     if (in_level && out_level) {
@@ -163,12 +183,12 @@ static __attribute__((noinline)) void rfx_dist(rdx_fx_slot_t *s, int32_t *b, uin
         }
         wanted = (in_level * target + out_level / 2u) / out_level;
         wanted = (uint32_t)clamp((int32_t)wanted, 8192, 98304); /* 0.125x .. 1.5x */
-        if (!s->dist_gain_q16)
-            s->dist_gain_q16 = wanted;
+        if (!s->dist_gain_q16[ch & 1u])
+            s->dist_gain_q16[ch & 1u] = wanted;
         else
-            s->dist_gain_q16 = (uint32_t)((7u * s->dist_gain_q16 + wanted + 4u) >> 3);
+            s->dist_gain_q16[ch & 1u] = (uint32_t)((7u * s->dist_gain_q16[ch & 1u] + wanted + 4u) >> 3);
     }
-    gain = s->dist_gain_q16 ? s->dist_gain_q16 : 65536u;
+    gain = s->dist_gain_q16[ch & 1u] ? s->dist_gain_q16[ch & 1u] : 65536u;
     for (i = 0; i < n; i++) {
         int32_t y = gain <= 65536u ? mulq16(b[i], gain) :
                     b[i] + mulq16(b[i], gain - 65536u);
@@ -178,10 +198,12 @@ static __attribute__((noinline)) void rfx_dist(rdx_fx_slot_t *s, int32_t *b, uin
 
 /* Envelope-following wah.  SENS controls the upward envelope excursion and
  * REZ the SVF resonance.  SELECT supplies the manual centre position. */
-static __attribute__((noinline)) void rfx_wah(rdx_fx_slot_t *s, int32_t *b, uint32_t n, uint32_t pos)
+static __attribute__((noinline)) void rfx_wah(rdx_fx_slot_t *s, int32_t *b, uint32_t n,
+                                               uint32_t pos, uint32_t ch)
 {
     uint32_t i;
-    int32_t env = s->wah_env, sens = s->p1;
+    uint32_t cch = ch & 1u;
+    int32_t env = s->wah_env[cch], sens = s->p1;
     int32_t e = env > 65535 ? 65535 : env;
     int32_t cut = (10 + (int32_t)pos * 55 / 127 + (e * sens * 50 >> 23)) << 8;
     tsvf_t c;
@@ -190,23 +212,24 @@ static __attribute__((noinline)) void rfx_wah(rdx_fx_slot_t *s, int32_t *b, uint
         int32_t x = b[i], a = x < 0 ? -x : x, v3, bp, lp, y;
         a = a > 131071 ? 131071 : a;
         env += a > env ? (a - env) >> 3 : (a - env) >> 9;
-        v3 = clamp(x, -150000, 150000) - s->wah_ic2;
-        bp = (c.a1 * s->wah_ic1 + c.a2 * v3) >> 13;
-        lp = s->wah_ic2 + ((c.a2 * s->wah_ic1 + c.a3 * v3) >> 13);
-        s->wah_ic1 = clamp(2 * bp - s->wah_ic1, -150000, 150000);
-        s->wah_ic2 = clamp(2 * lp - s->wah_ic2, -150000, 150000);
+        v3 = clamp(x, -150000, 150000) - s->wah_ic2[cch];
+        bp = (c.a1 * s->wah_ic1[cch] + c.a2 * v3) >> 13;
+        lp = s->wah_ic2[cch] + ((c.a2 * s->wah_ic1[cch] + c.a3 * v3) >> 13);
+        s->wah_ic1[cch] = clamp(2 * bp - s->wah_ic1[cch], -150000, 150000);
+        s->wah_ic2[cch] = clamp(2 * lp - s->wah_ic2[cch], -150000, 150000);
         y = clamp(lp + bp + (bp >> 1), -180000, 180000);
         b[i] = (x >> 2) + (y >> 1) + (y >> 2);          /* 25 % dry, 75 % wah */
     }
-    s->wah_env = env;
+    s->wah_env[cch] = env;
 }
 
 /* Felucca's four-stage phaser and 256-sample flanger.  Chorus uses Felucca's
  * native parallel bus below instead.  Reface has DEPTH / RATE only, so
  * feedback is a conservative fixed part of each remaining model. */
-static __attribute__((noinline)) void rfx_swept(rdx_fx_slot_t *s, int32_t *b, uint32_t n)
+static __attribute__((noinline)) void rfx_swept_felucca(rdx_fx_slot_t *s, int32_t *b,
+                                                        uint32_t n, uint32_t ch)
 {
-    ins_t *q = &s->ins;
+    ins_t *q = &s->ins[ch & 1u];
     uint32_t i, inc = LFO_INC[s->p2 & 127u] / CTL, dep = s->p1;
     if (s->type == RFX_PHASER) {
         uint32_t tr = pf_tri(q->ph + (n >> 1) * inc);
@@ -252,6 +275,8 @@ static __attribute__((noinline)) void rfx_swept(rdx_fx_slot_t *s, int32_t *b, ui
     }
 }
 
+#include "rdx_fx_picoface.c"
+
 /* Reface Delay DEPTH is mapped onto the two controls which shaped Felucca's
  * old parallel delay.  DEPTH 50 therefore has the familiar SEND 30 / FDBK 60
  * balance.  At the top, feedback stops at Felucca's stable documented limit. */
@@ -269,7 +294,7 @@ static uint32_t rfx_delay_feedback(uint32_t depth)
 static uint32_t rfx_delay_samples(uint32_t time)
 {
     uint32_t dl = ((uint32_t)RFX_DELAY_T10[time & 127u] * FS + 5000u) / 10000u;
-    return dl < 1u ? 1u : dl > RFX_DLY_MASK ? RFX_DLY_MASK : dl;
+    return dl < 1u ? 1u : dl >= RFX_DLY_LEN ? RFX_DLY_LEN - 1u : dl;
 }
 
 #define RFX_DLY_COLOR 70u                    /* Felucca's warm default */
@@ -298,11 +323,13 @@ static __attribute__((noinline)) void rfx_delay(rdx_fx_slot_t *s, int32_t *b, ui
     for (i = 0; i < n; i++) {
         int32_t x = b[i];
         int32_t in = mulq15(clamp(x, -xmax, xmax), send);
-        int32_t o = s->ds_fill >= dl ? line[(s->ds_wp - dl) & RFX_DLY_MASK] : 0;
+        uint32_t rp = s->ds_wp >= dl ? s->ds_wp - dl : s->ds_wp + RFX_DLY_LEN - dl;
+        int32_t o = s->ds_fill >= dl ? line[rp] : 0;
         s->ds_lp += mulq15(o - s->ds_lp, col);
-        line[s->ds_wp & RFX_DLY_MASK] =
+        line[s->ds_wp] =
             (int16_t)clamp((in >> 1) + mulq15(s->ds_lp, fb), -32768, 32767);
-        s->ds_wp++;
+        if (++s->ds_wp >= RFX_DLY_LEN)
+            s->ds_wp = 0;
         if (s->ds_fill < dl)
             s->ds_fill++;
         b[i] = x + mulq15(o << 1, mix);
@@ -322,7 +349,7 @@ static uint32_t rfx_reverb_size(uint32_t time)
 }
 
 static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32_t slot,
-                                                        int32_t *b, uint32_t n, uint32_t keep_side)
+                                                        int32_t *l, int32_t *r, uint32_t n)
 {
     int16_t *comb = slot ? rdx_rev_comb2 : rev_comb;
     int16_t *ap = slot ? rdx_rev_u2.ap : rev_ap;
@@ -334,15 +361,15 @@ static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32
     send = (int32_t)value * 258;                       /* Felucca send 0 .. 42, Q15 */
     xmax = 0x7FFFFFFF / send;
     for (i = 0; i < n; i++) {
-        rfx_work.in[i] = mulq15(clamp(b[i], -xmax, xmax), send);
+        int32_t mid = (l[i] >> 1) + (r[i] >> 1);
+        rfx_work.in[i] = mulq15(clamp(mid, -xmax, xmax), send);
         rfx_work.wet[i] = 0;
     }
     rev_hall_core(rfx_work.in, rfx_work.wet, n, comb, ap, h, size, HALL_DAMP, h->sd);
     rdx_rev_size = (uint8_t)size;                       /* INFO/browser diagnostic: last HALL run */
     for (i = 0; i < n; i++) {
-        b[i] += rfx_work.wet[i];                        /* serial dry + wet into the following slot */
-        if (keep_side)
-            rfx_work.side[i] += h->sd[i];              /* final slot: preserve Felucca's stereo spread */
+        l[i] += rfx_work.wet[i] + h->sd[i];             /* HALL mid/side reconstructed before FX2 */
+        r[i] += rfx_work.wet[i] - h->sd[i];
     }
 }
 
@@ -351,19 +378,42 @@ static uint8_t rdx_cho_depth = 60u, rdx_cho_rate = 40u;
 
 /* Feed the slot signal into Felucca's native Chorus at SEND 20, then return its
  * wet signal immediately.  The next slot therefore receives dry + Chorus. */
-static __attribute__((noinline)) void rfx_chorus_serial(rdx_fx_slot_t *s, int32_t *b, uint32_t n)
+static __attribute__((noinline)) void rfx_chorus_serial(rdx_fx_slot_t *s, int32_t *l,
+                                                        int32_t *r, uint32_t n)
 {
     uint32_t i;
     uint32_t depth = s->p1 >> 1;                       /* Reface DEPTH -> half Felucca pitch excursion */
     int32_t send = RFX_CHORUS_SEND * 258;
     int32_t xmax = 0x7FFFFFFF / send;
-    for (i = 0; i < n; i++)
-        rfx_work.in[i] = mulq15(clamp(b[i], -xmax, xmax), send);
+    for (i = 0; i < n; i++) {
+        int32_t mid = (l[i] >> 1) + (r[i] >> 1);
+        rfx_work.in[i] = mulq15(clamp(mid, -xmax, xmax), send);
+    }
     fx_chorus_bus(rfx_work.in, rfx_work.wet, n, s->p2, depth);
     rdx_cho_depth = (uint8_t)depth;
     rdx_cho_rate = s->p2;
+    for (i = 0; i < n; i++) {
+        l[i] += rfx_work.wet[i];
+        r[i] += rfx_work.wet[i];
+    }
+}
+
+/* Delay keeps Felucca's one full-length mono feedback line.  In a stereo
+ * chain it listens to the mid signal and adds the same echo to both channels;
+ * any width created by an earlier slot remains in the dry component. */
+static __attribute__((noinline)) void rfx_delay_stereo(rdx_fx_slot_t *s, int32_t *l,
+                                                       int32_t *r, uint32_t n, uint32_t si)
+{
+    uint32_t i;
     for (i = 0; i < n; i++)
-        b[i] += rfx_work.wet[i];
+        rfx_work.in[i] = (l[i] >> 1) + (r[i] >> 1);
+    rfx_delay(s, rfx_work.in, n, si);
+    for (i = 0; i < n; i++) {
+        int32_t mid = (l[i] >> 1) + (r[i] >> 1);
+        int32_t echo = rfx_work.in[i] - mid;
+        l[i] += echo;
+        r[i] += echo;
+    }
 }
 
 static uint32_t rdx_fx_has_effect(const track_t *t)
@@ -458,8 +508,11 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
     uint32_t k, tr = (uint32_t)(t - trk) % NTRK;
     const rdx_patch_t *p = rdx_track_get(tr);
     rdx_fx_track_t *f = &rdx_fx[tr];
-    for (k = 0; k < n; k++)
+    for (k = 0; k < n; k++) {
+        rfx_work.l[k] = b[k];
+        rfx_work.r[k] = b[k];
         rfx_work.side[k] = 0;
+    }
 #if defined(__EMSCRIPTEN__)
     if (rdx_fx_test_bypass)
         return;
@@ -470,32 +523,59 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         uint32_t p2 = p->common.effects[k][2] & 127u;
         uint32_t si = rfx_slot_index(t, k);
         rdx_fx_slot_t *s = &f->slot[k];
-        uint32_t changed = rfx_slot_set(s, ty, p1, p2);
+        uint32_t model = ty == RFX_PHASER ? rdx_phaser_model_get() :
+                         ty == RFX_FLANGER ? rdx_flanger_model_get() : 0u;
+        uint32_t changed = rfx_slot_set(s, ty, p1, p2, model);
         if (changed)
             rfx_hall_clear(k);                          /* no old-patch HALL tail in this physical slot */
         switch (ty) {
-        case RFX_DIST:    rfx_dist(s, b, n); break;
-        case RFX_WAH:     rfx_wah(s, b, n, rdx_touch_wah_get(t)); break;
-        case RFX_CHORUS:  rfx_chorus_serial(s, b, n); break;
+        case RFX_DIST:
+            rfx_dist(s, rfx_work.l, n, 0u);
+            rfx_dist(s, rfx_work.r, n, 1u);
+            break;
+        case RFX_WAH:
+            rfx_wah(s, rfx_work.l, n, rdx_touch_wah_get(t), 0u);
+            rfx_wah(s, rfx_work.r, n, rdx_touch_wah_get(t), 1u);
+            break;
+        case RFX_CHORUS:
+            rfx_chorus_serial(s, rfx_work.l, rfx_work.r, n);
+            break;
         case RFX_FLANGER:
-        case RFX_PHASER:  rfx_swept(s, b, n); break;
-        case RFX_DELAY:   if (p1) rfx_delay(s, b, n, si); break;
+            if (model)
+                rfx_flanger_rdx(s, rfx_work.l, rfx_work.r, n, si);
+            else {
+                rfx_swept_felucca(s, rfx_work.l, n, 0u);
+                rfx_swept_felucca(s, rfx_work.r, n, 1u);
+            }
+            break;
+        case RFX_PHASER:
+            if (model)
+                rfx_phaser_rdx(s, rfx_work.l, rfx_work.r, n, si);
+            else {
+                rfx_swept_felucca(s, rfx_work.l, n, 0u);
+                rfx_swept_felucca(s, rfx_work.r, n, 1u);
+            }
+            break;
+        case RFX_DELAY:
+            if (p1)
+                rfx_delay_stereo(s, rfx_work.l, rfx_work.r, n, si);
+            break;
         case RFX_REVERB:
-            /* A downstream Felucca slot is mono.  Feed it HALL's mid return
-             * and discard the early stereo difference; keeping that side at
-             * the output would create a hidden parallel bypass around FX2. */
-            rfx_reverb_serial(s, k, b, n,
-                              k == 1u || !(p->common.effects[1][0] & 7u));
+            rfx_reverb_serial(s, k, rfx_work.l, rfx_work.r, n);
             break;
         default: break;
         }
+    }
+    for (k = 0; k < n; k++) {
+        b[k] = (rfx_work.l[k] >> 1) + (rfx_work.r[k] >> 1);
+        rfx_work.side[k] = (rfx_work.l[k] >> 1) - (rfx_work.r[k] >> 1);
     }
     if (!voices && f->tail)
         f->tail--;
 }
 
-/* Add HALL's native stereo difference after Part LEVEL.  Its mono return has
- * already passed through the rest of the serial chain in b. */
+/* Reconstruct the serial chain's side signal after Part LEVEL.  Its mid has
+ * already passed through the remaining mono track path in b. */
 static void rdx_fx_side_mix(const track_t *t, int32_t *l, int32_t *r, uint32_t n)
 {
     uint32_t i;

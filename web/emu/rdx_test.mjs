@@ -46,6 +46,7 @@ async function boot() {
 const d = await boot();
 const held = await boot();
 const effected = await boot();
+const fxab = await boot();
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
 check("32 Factory and 21 Selected RDX voices are visible", d.ex.web_test_preset_total() === 53);
 check("RDX TYPE defaults to the optimized renderer", d.ex.web_test_rdx_type() === 1);
@@ -53,6 +54,14 @@ d.ex.web_test_rdx_type_set(0);
 check("System RDX TYPE can switch back to the original renderer", d.ex.web_test_rdx_type() === 0);
 d.ex.web_test_rdx_type_set(1);
 check("System RDX TYPE can switch to the optimized renderer", d.ex.web_test_rdx_type() === 1);
+check("PHS and FLG MODEL default to the fixed-point PicoFace RDX algorithms",
+      d.ex.web_test_rdx_phaser_model() === 1 && d.ex.web_test_rdx_flanger_model() === 1);
+d.ex.web_test_rdx_phaser_model_set(0);
+d.ex.web_test_rdx_flanger_model_set(0);
+check("PHS and FLG MODEL retain the original Felucca algorithms for A/B tests",
+      d.ex.web_test_rdx_phaser_model() === 0 && d.ex.web_test_rdx_flanger_model() === 0);
+d.ex.web_test_rdx_phaser_model_set(1);
+d.ex.web_test_rdx_flanger_model_set(1);
 check("MIDI velocity curve defaults to HARD 1", d.ex.web_test_velocity_curve() === 3);
 const velocityAt64 = [96, 80, 64, 48, 32];
 let velocityCurvesOk = true;
@@ -213,6 +222,41 @@ check("Touch Wah is detected on the current RDX patch", effected.ex.web_test_rdx
 const wah0 = effected.ex.web_test_rdx_wah_pos();
 check("Touch Wah manual centre follows SELECT control",
       effected.ex.web_test_rdx_wah_turn(9) === Math.min(127, wah0 + 9));
+
+const sideEnergy = (audio) => {
+  let e = 0;
+  for (let i = 0; i < audio.samplesL.length; i++) e += Math.abs(audio.samplesL[i] - audio.samplesR[i]);
+  return e;
+};
+fxab.ex.web_test_rdx_preset(0);
+fxab.ex.web_test_rdx_fx_set(0, 4, 96, 64);             // Flanger only
+fxab.ex.web_test_rdx_fx_set(1, 0, 0, 0);
+fxab.ex.web_test_rdx_flanger_model_set(0);
+fxab.ex.web_midi(0x90, 60, 100);
+const oldFlanger = fxab.renderFrames(128 * 16, true);
+fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
+fxab.ex.web_test_rdx_flanger_model_set(1);
+fxab.ex.web_midi(0x90, 60, 100);
+const rdxFlanger = fxab.renderFrames(128 * 16, true);
+fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
+check("RDX Flanger creates stereo width while the retained Felucca model remains mono",
+      sideEnergy(oldFlanger) < 0.001 && sideEnergy(rdxFlanger) > 0.01);
+
+fxab.ex.web_test_rdx_fx_set(0, 5, 96, 64);             // Phaser only
+fxab.ex.web_test_rdx_phaser_model_set(1);
+fxab.ex.web_midi(0x90, 60, 100);
+const rdxPhaser = fxab.renderFrames(128 * 24, true);
+fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
+check("RDX Phaser's PicoFace short-delay stage produces a stereo output",
+      sideEnergy(rdxPhaser) > 0.01);
+
+fxab.ex.web_test_rdx_fx_set(0, 7, 90, 80);             // Hall -> clean Distortion
+fxab.ex.web_test_rdx_fx_set(1, 1, 0, 64);
+fxab.ex.web_midi(0x90, 60, 100);
+const hallThroughFx2 = fxab.renderFrames(128 * 40, true);
+fxab.ex.web_midi(0x80, 60, 0); fxab.render(1800);
+check("Hall stereo return passes through FX2 without collapsing to mono",
+      sideEnergy(hallThroughFx2) > 0.01);
 
 d.ex.web_test_rdx_preset(0);
 held.ex.web_test_rdx_preset(0);

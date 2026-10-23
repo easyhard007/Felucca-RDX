@@ -42,6 +42,7 @@ static const uint8_t ED_MENU[][2] = {
 #endif
 #if FELUCCA_RDX
     {MI_VELCURVE, 33},                                 /* RDX: incoming MIDI velocity curve, SOFT 2 .. HARD 2 */
+    {MI_PHSMODEL, 34}, {MI_FLGMODEL, 35},              /* RDX: Felucca / PicoFace fixed-point effect A/B */
 #endif
 };
 #define ED_MENU_N NELEM(ED_MENU)

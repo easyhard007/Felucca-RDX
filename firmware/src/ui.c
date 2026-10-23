@@ -249,14 +249,17 @@ enum { CF_NONE, CF_CLEAR_SEQ, CF_CLEAR_TRK, CF_OVR_PROJ, CF_OVR_USER, CF_LOAD_PA
 #define ui_scr (favorites.factory[15][27])
 /* MENU > ANIM IDLE (1.2, Discussion #135; menu_items.c, ui_input.c idle_leds): bit 0, the LEDs' idle animation, in a
  * byte no engine uses, kept with the settings; 0 in every older setting = off. RDX builds use bit 1 for MENU >
- * SYSTEM > RDX TYPE (0 ORIGIN, 1 OPTIMIZED), bit 2 to mark that choice as explicitly stored, and bits 3..5 for the
- * MIDI velocity curve. Stored curve 0 is HARD 1, so every older record receives the new RDX default. */
+ * SYSTEM > RDX TYPE (0 ORIGIN, 1 OPTIMIZED), bit 2 to mark that choice as explicitly stored, bits 3..5 for the
+ * MIDI velocity curve, and inverted bits 6/7 for AUDIO > PHS/FLG MODEL (0 RDX, 1 FELUCCA). Stored curve 0 is
+ * HARD 1, so every older record receives both the velocity and PicoFace-effect RDX defaults. */
 #define ui_idle (favorites.factory[15][10])
 #if FELUCCA_RDX
 #define RDX_TYPE_OPT 2u
 #define RDX_TYPE_SET 4u
 #define VEL_CURVE_SHIFT 3u
 #define VEL_CURVE_MASK (7u << VEL_CURVE_SHIFT)
+#define RDX_PHS_FELUCCA 0x40u
+#define RDX_FLG_FELUCCA 0x80u
 static const uint8_t VEL_CURVE_STORE[VEL_CURVE_N] = {1, 2, 3, 0, 4};
 static const uint8_t VEL_CURVE_LOAD[8] = {VEL_HARD1, VEL_SOFT2, VEL_SOFT1, VEL_MEDIUM,
                                           VEL_HARD2, VEL_HARD1, VEL_HARD1, VEL_HARD1};

@@ -15,7 +15,11 @@
  * nothing of theirs is in the settings record (MI_PROJECT: menu_get / menu_put read and write song.g) */
 enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_HOME, MI_HOLD, MI_ACCEL, MI_LATCH, MI_BPMLOCK, MI_SCLLED,
        MI_PREVIEW, MI_CHADD, MI_SELECT, MI_LOWCUT, MI_USB,
-       MI_CLICK, MI_CLKLVL, MI_COUNTIN, MI_TUNE, MI_MIDIIN, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_MFOLLOW, MI_SCRWAKE, MI_LCLEAR, MI_SERIAL, MI_RESTORE, MI_HELP,
+       MI_CLICK, MI_CLKLVL, MI_COUNTIN, MI_TUNE,
+#if FELUCCA_RDX
+       MI_PHSMODEL, MI_FLGMODEL,
+#endif
+       MI_MIDIIN, MI_TCH1, MI_TCH2, MI_TCH3, MI_TCH4, MI_MFOLLOW, MI_SCRWAKE, MI_LCLEAR, MI_SERIAL, MI_RESTORE, MI_HELP,
 #if FELUCCA_CPU2
        MI_CPU2,                                        /* (not in a FELUCCA_CPU2=0 build: core.h) */
 #endif
@@ -31,11 +35,11 @@ enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_H
                                                         * in MIDI; 1.6.1: 2ND CORE in SYSTEM) */
 #define MI_VALUES MI_PANEL
 #if FELUCCA_CPU2 && FELUCCA_RDX
-#define MI_TEXT(row) ((row) == MI_CPU2 || (row) == MI_RDXTYPE)
+#define MI_TEXT(row) ((row) == MI_CPU2 || (row) == MI_RDXTYPE || (row) == MI_PHSMODEL || (row) == MI_FLGMODEL)
 #elif FELUCCA_CPU2
 #define MI_TEXT(row) ((row) == MI_CPU2)                /* OFF / ON (BETA): its values as words, not a switch (ui_menu.c) */
 #elif FELUCCA_RDX
-#define MI_TEXT(row) ((row) == MI_RDXTYPE)
+#define MI_TEXT(row) ((row) == MI_RDXTYPE || (row) == MI_PHSMODEL || (row) == MI_FLGMODEL)
 #else
 #define MI_TEXT(row) 0
 #endif
@@ -46,6 +50,9 @@ static int menu_valued(uint32_t row) { return row < MI_VALUES && row != MI_LCLEA
 static const char *const MI_NAME[MI_COUNT] = {"COLOR", "STYLE", "LARGE", "ANIM", "LEDS", "SCREEN OFF", "SCOPE", "HOME", "HOLD", "KNOB ACCEL",
                                               "FX LATCH", "BPM LOCK", "SCALE LEDS", "STEP PREVIEW", "CHORD ENTRY", "SELECT",
                                               "SPEAKER EQ", "USB LEVEL", "CLICK", "CLICK LEVEL", "COUNT-IN", "TUNE",
+#if FELUCCA_RDX
+                                              "PHS MODEL", "FLG MODEL",
+#endif
                                               "MIDI IN", "T1 CHANNEL", "T2 CHANNEL", "T3 CHANNEL", "T4 CHANNEL",
                                               "AUTO SELECT", "SCREEN WAKE", "LEARN CLEAR", "USB SERIAL", "RESTORE LAST", "HELP",
 #if FELUCCA_CPU2
@@ -77,6 +84,9 @@ static const uint8_t MI_TAB[MI_COUNT] = {
     MTAB_AUDIO, MTAB_AUDIO, MTAB_AUDIO, MTAB_AUDIO, MTAB_AUDIO,             /* SPEAKER EQ, USB LEVEL, CLICK, CLICK LEVEL,
                                                                              * COUNT-IN */
     MTAB_AUDIO,                                                             /* TUNE (1.2) */
+#if FELUCCA_RDX
+    MTAB_AUDIO, MTAB_AUDIO,                                                  /* PicoFace/Felucca phaser and flanger A/B */
+#endif
     MTAB_MIDI,                                                              /* MIDI IN (1.2) */
     MTAB_MIDI, MTAB_MIDI, MTAB_MIDI, MTAB_MIDI,                             /* T1..T4 CHANNEL (1.5.5) */
     MTAB_MIDI,                                                              /* AUTO SELECT (1.5.5) */
@@ -193,6 +203,7 @@ static const char *const LEDS_ROW_N[LEDS_ROWS] = {"OFF", "DIM LO", "DIM HI", "IN
 static const char *const SELECT_N[SEL_N] = {"BPM", "PAGE", "MODW", "VEL"};
 #if FELUCCA_RDX
 static const char *const RDX_TYPE_N[2] = {"ORIGIN", "OPTIMIZED"};
+static const char *const RDX_FX_MODEL_N[2] = {"FELUCCA", "RDX"};
 static const char *const VEL_CURVE_NM[VEL_CURVE_N] = {"SOFT 2", "SOFT 1", "MEDIUM", "HARD 1", "HARD 2"};
 #endif
 
@@ -226,6 +237,8 @@ static uint32_t menu_get(uint32_t row)
 #if FELUCCA_RDX
     case MI_RDXTYPE: return rdx_type_get();
     case MI_VELCURVE: return midi_velocity_curve_get();
+    case MI_PHSMODEL: return rdx_phaser_model_get();
+    case MI_FLGMODEL: return rdx_flanger_model_get();
 #endif
     case MI_CLICK: case MI_CLKLVL: case MI_COUNTIN: return rp_get(row - MI_CLICK);
     case MI_TUNE: return (uint32_t)(clamp(song.g[G_TUNE], TUNE_MIN, TUNE_MIN + (int32_t)TUNE_N - 1) - TUNE_MIN);
@@ -258,6 +271,8 @@ static const char *menu_vname(uint32_t row, uint32_t v)
 #if FELUCCA_RDX
     case MI_RDXTYPE: return RDX_TYPE_N[v & 1u];
     case MI_VELCURVE: return VEL_CURVE_NM[v % VEL_CURVE_N];
+    case MI_PHSMODEL:
+    case MI_FLGMODEL: return RDX_FX_MODEL_N[v & 1u];
 #endif
     case MI_LEDS: return LEDS_ROW_N[v % LEDS_ROWS];
     case MI_MIDIIN: return N_ROUTE[v % NELEM(N_ROUTE)];
@@ -329,6 +344,14 @@ static void menu_put(uint32_t row, uint32_t v)
         rdx_type_set(v);
         break;
     case MI_VELCURVE: velocity_curve_store(v); break;
+    case MI_PHSMODEL:
+        ui_idle = (uint8_t)(v ? ui_idle & ~RDX_PHS_FELUCCA : ui_idle | RDX_PHS_FELUCCA);
+        rdx_phaser_model_set(v);
+        break;
+    case MI_FLGMODEL:
+        ui_idle = (uint8_t)(v ? ui_idle & ~RDX_FLG_FELUCCA : ui_idle | RDX_FLG_FELUCCA);
+        rdx_flanger_model_set(v);
+        break;
 #endif
     case MI_LEDS:                                      /* (INV LO / INV HI: INV and its level, ui.c ui_leds_inv) */
         settings_leds = LEDS_MENU[v < LEDS_COUNT ? v : LEDS_COUNT - 1u];

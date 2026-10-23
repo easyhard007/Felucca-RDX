@@ -528,28 +528,7 @@ EXPORT void web_test_heavy(void)
 
 EXPORT uint32_t web_test_user_preset(uint32_t i) { return (uint32_t)up_used(i); }
 #if FELUCCA_FM6_ONLY
-/* FM6-only upgrade regression hooks (fm6_only_test.mjs): create the two pieces of
- * state an existing physical unit has that an empty browser instance does not. */
-EXPORT void web_test_make_legacy_state(void)
-{
-    uint32_t k;
-    favorites.filter = 1;
-    favorites.factory[15][11] = 0;
-    favorites.factory[ENGI_FM6][0] = 7u;       /* TINE EP, BELL, FM BASS only */
-    favorites.factory[15][13] = 0;             /* before FM6_ONLY_SETTINGS_TAG */
-    settings_save();
-    trk[0].eng_req = 0;                        /* an autosaved ANALOG track */
-    trk[0].preset = 7;
-    project_capture(&proj_scratch);
-    proj_wire_gen++;
-    if (proj_pack(&proj_wire, &proj_scratch))
-        (void)st_save(OBJ_AUTOSAVE, &proj_wire, sizeof proj_wire);
-    for (k = 0; k < NTRK; k++)
-        panic_req |= (uint8_t)(1u << k);
-}
 EXPORT uint32_t web_test_preset_total(void) { uint32_t n; (void)preset_pos(&n); return n; }
-EXPORT uint32_t web_test_track_engine(uint32_t k) { return k < NTRK ? trk[k].eng_req : 0xFFu; }
-EXPORT uint32_t web_test_track_preset(uint32_t k) { return k < NTRK ? trk[k].preset : 0xFFu; }
 #if FELUCCA_RDX
 EXPORT void web_test_rdx_preset(uint32_t p)
 {
@@ -573,6 +552,19 @@ EXPORT void web_test_rdx_type_set(uint32_t type) { menu_put(MI_RDXTYPE, type != 
 EXPORT uint32_t web_test_rdx_type(void) { return menu_get(MI_RDXTYPE); }
 EXPORT void web_test_velocity_curve_set(uint32_t curve) { menu_put(MI_VELCURVE, curve); }
 EXPORT uint32_t web_test_velocity_curve(void) { return menu_get(MI_VELCURVE); }
+EXPORT void web_test_rdx_phaser_model_set(uint32_t model) { menu_put(MI_PHSMODEL, model != 0u); }
+EXPORT uint32_t web_test_rdx_phaser_model(void) { return menu_get(MI_PHSMODEL); }
+EXPORT void web_test_rdx_flanger_model_set(uint32_t model) { menu_put(MI_FLGMODEL, model != 0u); }
+EXPORT uint32_t web_test_rdx_flanger_model(void) { return menu_get(MI_FLGMODEL); }
+EXPORT void web_test_rdx_fx_set(uint32_t slot, uint32_t type, uint32_t p1, uint32_t p2)
+{
+    rdx_patch_t *p = (rdx_patch_t *)(uintptr_t)rdx_track_get(0);
+    if (slot >= 2u)
+        return;
+    p->common.effects[slot][0] = (uint8_t)(type & 7u);
+    p->common.effects[slot][1] = (uint8_t)(p1 & 127u);
+    p->common.effects[slot][2] = (uint8_t)(p2 & 127u);
+}
 EXPORT uint32_t web_test_velocity_map(uint32_t velocity) { return midi_velocity_map(velocity); }
 EXPORT uint32_t web_test_velocity_map_q8(uint32_t velocity) { return midi_velocity_map_q8(velocity); }
 EXPORT uint32_t web_test_rdx_velocity_gain(uint32_t velocity_q8)

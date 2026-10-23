@@ -88,6 +88,17 @@ static uint8_t rdx_type = 1u;                 /* OPTIMIZED is the default for a 
 static uint32_t rdx_type_get(void) { return rdx_type != 0u; }
 static void rdx_type_set(uint32_t type) { rdx_type = (uint8_t)!!type; }
 
+/* MENU > AUDIO > PHS/FLG MODEL.  The original fixed-point Felucca inserts
+ * remain available for controlled A/B tests; RDX selects the fixed-point
+ * ports of PicoFaceDX's stereo algorithms.  RDX is the default; the saved
+ * preference bits are inverted so older all-zero settings receive it while
+ * an explicit Felucca A/B choice can still persist. */
+static uint8_t rdx_phaser_model = 1u, rdx_flanger_model = 1u;
+static uint32_t rdx_phaser_model_get(void) { return rdx_phaser_model != 0u; }
+static uint32_t rdx_flanger_model_get(void) { return rdx_flanger_model != 0u; }
+static void rdx_phaser_model_set(uint32_t model) { rdx_phaser_model = (uint8_t)!!model; }
+static void rdx_flanger_model_set(uint32_t model) { rdx_flanger_model = (uint8_t)!!model; }
+
 static uint32_t rdx_touch_wah_active(const track_t *t)
 {
     const rdx_patch_t *p;
