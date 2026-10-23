@@ -20,7 +20,7 @@ The three SDK files (uboot.boot, cfg_tool.bin, eq_cfg_hw.bin) are Apache-2.0, no
 ship LICENSES/Apache-2.0.txt with every package (LICENSING.md; make_site.py and
 build.py --release do).
 
-  fm1pkg_make.py APP.bin OTA.bin OUT.fwsc [--product FM-1_9XY] [--key 0x980F]
+  fm1pkg_make.py APP.bin OTA.bin OUT.fwsc [--product FM-1_9XY] [--key 0x980F] [--clean]
 """
 import argparse
 import os
@@ -30,6 +30,12 @@ from pathlib import Path
 APP_SLOT = 0x8DFBC
 FLASH_SIZE = 0x93000
 KEY = 0x980F
+CLEAN_MAGIC = b"FELUCCA-CLEAN-1!"
+# Reserve one aligned SFC block at the end of app.bin's padded slot.  The
+# loader decrypts this package-only flag before deciding whether to erase the
+# user store.  It is covered by both app.bin's CRC and flash.bin's CRC.
+CLEAN_APP_OFF = (APP_SLOT - 32) & ~31
+CLEAN_FLASH_OFF = 0x4000 + 0x120 + CLEAN_APP_OFF
 # flash header: JieLi SDK defaults (burner_size 544, VID "0.01", flash_size 0xFF000,
 # fs_ver 0x10, PID "AC791N_STORY"), plain, without its CRC
 FLASH_HDR = bytes.fromhex("20022f104cc900f00f001010a4ff4e5d0b41e0cd781dc856417fb367cf9f")
@@ -104,7 +110,7 @@ def sdk_file(rel):
         raise SystemExit(f"fm1pkg_make: {path}: {e.strerror}. Set AC79_SDK to a JieLi AC79 SDK checkout.")
 
 
-def flash_image(app, key):
+def flash_image(app, key, clean=False):
     spl = sdk_file("uboot.boot")                         # SDK SPL, BANKCB-encoded as in the SDK
     cfg_tool = sdk_file("cfg_tool.bin")
     eq = sdk_file("cfg/eq_cfg_hw.bin")
@@ -126,9 +132,11 @@ def flash_image(app, key):
         enc(head, o, 32)
     f[0:len(head)] = head
     # ---- app area (plain first, then SFC)
-    if len(app) > APP_SLOT:
-        raise SystemExit(f"app is {len(app)} B, the slot is {APP_SLOT} B")
-    app = app + b"\xFF" * (APP_SLOT - len(app))
+    if len(app) > CLEAN_APP_OFF:
+        raise SystemExit(f"app is {len(app)} B, the usable slot is {CLEAN_APP_OFF} B")
+    app = bytearray(app + b"\xFF" * (APP_SLOT - len(app)))
+    if clean:
+        app[CLEAN_APP_OFF:CLEAN_APP_OFF + len(CLEAN_MAGIC)] = CLEAN_MAGIC
     blk = 0x120 + APP_SLOT + len(cfg_tool)              # app_area_head block size
     area = bytearray(b"\xFF" * blk)
     area[0x120:0x120 + APP_SLOT] = app
@@ -199,13 +207,15 @@ def main():
     ap.add_argument("out", type=Path)
     ap.add_argument("--product", default="FM-1_900")
     ap.add_argument("--key", type=lambda s: int(s, 0), default=KEY)
+    ap.add_argument("--clean", action="store_true", help="erase Felucca user data and settings after installation")
     ap.add_argument("--sdk", type=Path, help="JieLi AC79 SDK checkout (default: $AC79_SDK)")
     a = ap.parse_args()
     global SDK
     SDK = a.sdk
-    pkg = ufw(flash_image(a.app.read_bytes(), a.key), a.ota.read_bytes(), a.product)
+    pkg = ufw(flash_image(a.app.read_bytes(), a.key, a.clean), a.ota.read_bytes(), a.product)
     a.out.write_bytes(pkg)
-    print(f"package {a.out}: {len(pkg)} B, identity {a.product}, chip key {a.key:#06x}")
+    mode = ", clean install" if a.clean else ", preserves user data"
+    print(f"package {a.out}: {len(pkg)} B, identity {a.product}, chip key {a.key:#06x}{mode}")
 
 
 if __name__ == "__main__":

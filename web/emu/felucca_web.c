@@ -561,7 +561,6 @@ EXPORT void web_test_rdx_dry(void)
     rdx_fx_test_bypass = 1;
 #endif
     t->p[P_DIST] = t->p[P_CHOR] = t->p[P_DLY] = t->p[P_REV] = 0;
-    t->p[P_ITYPE] = t->p[P_IMIX] = 0;
 }
 EXPORT void web_test_rdx_type_set(uint32_t type) { menu_put(MI_RDXTYPE, type != 0u); }
 EXPORT uint32_t web_test_rdx_type(void) { return menu_get(MI_RDXTYPE); }
@@ -573,12 +572,39 @@ EXPORT void web_test_rdx_flanger_model_set(uint32_t model) { menu_put(MI_FLGMODE
 EXPORT uint32_t web_test_rdx_flanger_model(void) { return menu_get(MI_FLGMODEL); }
 EXPORT void web_test_rdx_fx_set(uint32_t slot, uint32_t type, uint32_t p1, uint32_t p2)
 {
-    rdx_patch_t *p = (rdx_patch_t *)(uintptr_t)rdx_track_get(0);
     if (slot >= 2u)
         return;
-    p->common.effects[slot][0] = (uint8_t)(type & 7u);
-    p->common.effects[slot][1] = (uint8_t)(p1 & 127u);
-    p->common.effects[slot][2] = (uint8_t)(p2 & 127u);
+    rdx_fx_slot_defaults(&trk[0], slot, type & 7u, p1 & 127u, p2 & 127u);
+}
+EXPORT uint32_t web_test_rdx_fx_page_count(void)
+{
+    uint32_t i, n = 0;
+    for (i = 0; i < NPAGES; i++) n += PAGES[i].fam == FAM_FX;
+    return n;
+}
+EXPORT uint32_t web_test_rdx_fx_page_name_byte(uint32_t at, uint32_t pos)
+{
+    uint32_t i;
+    for (i = 0; i < NPAGES; i++)
+        if (PAGES[i].fam == FAM_FX && !at--)
+            return pos < str_len(PAGES[i].title) ? (uint8_t)PAGES[i].title[pos] : 0u;
+    return 0u;
+}
+EXPORT uint32_t web_test_rdx_fx_live(uint32_t slot, uint32_t field)
+{
+    int16_t *p;
+    if (slot >= 2u) return 0xFFFFFFFFu;
+    if (field == 0u) return rdx_fx_type_of(&trk[0], slot);
+    if (field == 1u) return rdx_fx_send_of(&trk[0], slot);
+    p = rdx_fx_values(&trk[0], slot);
+    return field < 6u ? (uint32_t)(uint16_t)p[field - 2u] : 0xFFFFFFFFu;
+}
+EXPORT uint32_t web_test_rdx_fx_param_label_byte(uint32_t slot, uint32_t param, uint32_t pos)
+{
+    const param_desc_t *d;
+    if (slot >= 2u || param >= 4u) return 0u;
+    d = rdx_fx_param_desc(rdx_fx_type_of(&trk[0], slot), param);
+    return d && pos < str_len(d->label) ? (uint8_t)d->label[pos] : 0u;
 }
 EXPORT uint32_t web_test_velocity_map(uint32_t velocity) { return midi_velocity_map(velocity); }
 EXPORT uint32_t web_test_velocity_map_q8(uint32_t velocity) { return midi_velocity_map_q8(velocity); }
@@ -747,6 +773,56 @@ EXPORT uint32_t web_test_rdx_restore_stale_slot(void)
            (web_test_rdx_reverb_send(1) << 8) | web_test_rdx_reverb_time(1);
 }
 EXPORT uint32_t web_test_engine_poly(void) { return ENG_RDX.poly; }
+EXPORT uint32_t web_test_rdx_home_knob4_is_transpose(void) { return ENG_RDX.knob[3] == P_TRANS; }
+EXPORT uint32_t web_test_rdx_home_icon_is_transpose(void)
+{
+    const param_desc_t *d = track_desc(&trk[0], ENG_RDX.knob[3]);
+    return param_icon(d, trk[0].p[P_TRANS]) == ICON_TRANSPOSE;
+}
+EXPORT uint32_t web_test_rdx_home_label_byte(uint32_t unused, uint32_t i)
+{
+    const char *s = track_desc(&trk[0], ENG_RDX.knob[3])->label;
+    (void)unused;
+    return i < str_len(s) ? (uint8_t)s[i] : 0u;
+}
+EXPORT uint32_t web_test_rdx_master_note(uint32_t note, int32_t trans, int32_t octave)
+{
+    int16_t old_trans = trk[0].p[P_TRANS];
+    int8_t old_octave = song.octave;
+    uint32_t out;
+    trk[0].p[P_TRANS] = (int16_t)trans;
+    song.octave = (int8_t)octave;
+    out = rdx_master_note(&trk[0], note);
+    trk[0].p[P_TRANS] = old_trans;
+    song.octave = old_octave;
+    return out;
+}
+EXPORT uint32_t web_test_rdx_header_center_ink(int32_t octave)
+{
+    int8_t old_octave = song.octave;
+    uint8_t old_force = ui.force, old_layer = ui.layer;
+    uint16_t old_msg_t = ui.msg_t;
+    uint32_t old_rec = song.rec, old_running = chain.running;
+    uint16_t bg = (uint16_t)(T_BG << 8 | T_BG >> 8);
+    uint32_t x, y, ink = 0;
+    song.octave = (int8_t)clamp(octave, -3, 3);
+    song.rec = 0;
+    chain.running = 0;
+    ui.msg_t = 0;
+    ui.layer = 0;
+    ui.force = 1;
+    draw_head();
+    for (y = Y_HEAD; y < Y_HEAD + H_HEAD; y++)
+        for (x = 45; x < 200; x++)
+            ink += web_fb[y * 240u + x] != bg;
+    song.octave = old_octave;
+    song.rec = old_rec;
+    chain.running = old_running;
+    ui.msg_t = old_msg_t;
+    ui.layer = old_layer;
+    ui.force = old_force;
+    return ink;
+}
 EXPORT uint32_t web_test_version_byte(uint32_t i)
 {
     return i < sizeof FELUCCA_VERSION ? (uint8_t)FELUCCA_VERSION[i] : 0u;

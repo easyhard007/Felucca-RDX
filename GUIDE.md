@@ -7,7 +7,7 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 0.6.1
+- 当前版本：Felucca RDX 0.6.7
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
@@ -26,6 +26,7 @@ cd E:\Projects\fm1\RDX
 脚本会完成真机固件、WebAssembly 模拟器、RDX 回归测试和本地安装器构建。主要输出为：
 
 - `build\felucca.fwsc`：模拟器和安装脚本默认读取的固件包；
+- `build\felucca-clean.fwsc`：全新安装包；写入成功后清除工程、用户音色、用户采样、自动保存和系统设置；
 - `build\felucca-rdx-dualcore.fwsc`：双核固件的具名副本；
 - `build\felucca.bin`：FM-1 应用镜像；
 - `build\emu`：本地源码模拟器；
@@ -62,7 +63,9 @@ cd E:\Projects\fm1\RDX
 .\serve-rdx.ps1 installer
 ```
 
-用 Chrome 或 Edge 打开 <http://localhost:8000/webapp/installer/>，点击 `Install`，授权访问 FM-1 的 MIDI 端口并等待写入完成。安装器始终读取当前 `build\felucca.fwsc`。
+用 Chrome 或 Edge 打开 <http://localhost:8000/webapp/installer/>，点击 `Install`，授权访问 FM-1 的 MIDI 端口并等待写入完成。需要完全清除旧用户区时，勾选 `Fresh install` 后再安装。该模式会清除工程、用户音色、用户采样、自动保存以及全部系统设置，内置 Factory/Selected 音色不受影响。
+
+启动安装器时，脚本会在发现新固件包后自动重建网页安装目录，避免 `build\site\firmware` 继续提供旧版本。普通安装使用 `build\felucca.fwsc` 并保留用户区；全新安装使用 `build\felucca-clean.fwsc`。
 
 写入期间保持设备供电，不要拔出 USB 线或关闭页面。若要恢复官方固件，可使用 Felucca 官方安装器的 `Return to official V15`。
 
@@ -75,12 +78,28 @@ RDX 固件只有一个运行时轨道。ALGORITHM 旋钮不再切换轨道，MID
 - `Factory`：32 个 reface DX 原厂音色；
 - `Selected`：21 个导入的第三方 reface DX SysEx 音色。
 
+首页的 `KNOB 4` 是主移调 `Trans.`，范围为 -24 到 +24 半音，默认值为 0。`OCT-` 和 `OCT+` 在 -3 到 +3 个八度之间调节主八度，同时按下两键回到 0。非零八度显示在所有页面顶部正中；八度为 0 时中央保持空白。主移调和八度会同时作用于面板键盘、MIDI 输入、琶音器和音序器；最终音符会限制在 MIDI 0 到 127 范围内。
+
 RDX 使用串行立体声 `FX1 -> FX2` 链。Phaser 和 Flanger 可在 `AUDIO` 菜单中切换算法：
 
 - `PHS MODEL`：`RDX` 为定点 PicoFaceDX 算法，`FELUCCA` 为保留的原算法；
 - `FLG MODEL`：`RDX` 为定点 PicoFaceDX 算法，`FELUCCA` 为保留的原算法。
 
 两项默认均为 `RDX`，选择会保存到系统设置。
+
+按 `FX` 会在 5 页间循环：
+
+1. `FX`：`KNOB 1/2` 调整 FX1 的类型和发送量，`KNOB 3/4` 调整 FX2；
+2. `FX1`：按 FX1 类型动态显示其参数；
+3. `FX2`：按 FX2 类型动态显示其参数；
+4. `GLOBAL FX`：预留的全局效果 TYPE/MIX，目前只保存和显示，不参与声音计算；
+5. `SLICER`：保留 Felucca 的切片门控功能。
+
+`FX` 首页在四张参数卡上方使用两个横跨双卡的 `FX1` / `FX2` 主题标题条；四张卡依次显示
+`TYPE / SEND / TYPE / SEND`。名称与数值均使用小号字体，RDX 效果名称最多显示 6 个字符。TYPE 为
+`THRU` 时 SEND 显示 `-` 且旋钮不响应；对应的详情页用一张整行说明卡片代替四个空参数卡片。
+
+Reverb 可调 `TYPE / DEPTH / TIME / DAMP`，Delay 可调 `DEPTH / TIME / FDBK / COLOR`。音色首次载入时，发送量按原有 RDX 映射生成：Chorus 为 20，Delay 由原 Depth 映射，Reverb 为原 Depth 除以 3。用户修改后的参数会随工程和用户音色保存。
 
 ## 性能诊断
 

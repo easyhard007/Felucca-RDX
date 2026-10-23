@@ -25,6 +25,7 @@ Output: per size S in --sizes
 import argparse
 import json
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,6 +33,13 @@ import aa_raster as ar  # noqa: E402
 from gen_aa_font import huff_pack, huff_unpack  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# RDX supplies its own small transpose mark (# + flat).  It is injected into a
+# temporary copy of Fukiai before the normal rasterisation pass, so the firmware
+# keeps using the same antialiased/Huffman-compressed icon path as every other
+# parameter.  The source SVG is retained under assets rather than baking a
+# hand-edited bitmap into the firmware.
+CUSTOM_SVG = {"rdx_transpose": ROOT / "assets" / "rdx_transpose.svg"}
 
 # legacy icon name (assets/icons.json) -> Fukiai glyph name. Chosen from the glyph names only
 # (the semantics: ADSR stage icons for ATK/DEC/SUS/REL, filter response for CUT/RES, ...): review the
@@ -42,7 +50,7 @@ LEGACY = {
     "cutoff": "function_filter_lpf", "reso": "function_filter_lpf_peak", "rate": "symbol_speed",
     "lfo_wave": "waveform_sine", "wave": "waveform_variant", "pulse": "waveform_pulse_quarter",
     "shape": "waveform_variant_four", "pitch": "waveform_pitch", "tune": "symbol_tuning",
-    "detune": "function_phaseout", "transpose": "control_arrow_up_down", "octave": "control_arrow_up",
+    "detune": "function_phaseout", "transpose": "rdx_transpose", "octave": "control_arrow_up",
     "level": "symbol_volume", "pan": "symbol_pan", "mute": "control_speaker_mute",
     "dist": "function_signal_clip", "drive": "symbol_diode", "fold": "waveform_fold", "bits": "function_mask",
     "chorus": "symbol_waves", "delay": "symbol_echo", "reverb": "symbol_spring", "feedback": "symbol_feedback",
@@ -129,6 +137,60 @@ def glyph_table(font_path):
     from fontTools.ttLib import TTFont
     f = TTFont(str(font_path))
     return {name: cp for cp, name in f.getBestCmap().items()}
+
+
+def font_with_custom_svgs(font_path, out_dir):
+    """Return a temporary font containing the project SVG glyphs.
+
+    SVG uses a downward Y axis and arbitrary view boxes.  Each outline is fitted
+    into the font em with a small margin, flipped into font coordinates, and
+    converted from cubic curves to TrueType quadratic curves.
+    """
+    from fontTools.pens.boundsPen import BoundsPen
+    from fontTools.pens.cu2quPen import Cu2QuPen
+    from fontTools.pens.transformPen import TransformPen
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    from fontTools.svgLib.path import parse_path
+    from fontTools.ttLib import TTFont
+    from fontTools.misc.transform import Transform
+
+    f = TTFont(str(font_path), recalcBBoxes=False)
+    order = f.getGlyphOrder()
+    glyf, hmtx, upm = f["glyf"], f["hmtx"], f["head"].unitsPerEm
+    cmap_tables = [t for t in f["cmap"].tables if t.isUnicode()]
+    cp = 0xF800
+    for name, svg_path in CUSTOM_SVG.items():
+        root = ET.fromstring(svg_path.read_text(encoding="utf-8"))
+        paths = [e.attrib["d"] for e in root.iter() if e.tag.rsplit("}", 1)[-1] == "path" and e.attrib.get("d")]
+        bounds = BoundsPen(None)
+        for d in paths:
+            parse_path(d, bounds)
+        x0, y0, x1, y1 = bounds.bounds
+        margin = upm * 0.075
+        scale = min((upm - 2 * margin) / (x1 - x0), (upm - 2 * margin) / (y1 - y0))
+        tx = (upm - (x1 - x0) * scale) / 2 - x0 * scale
+        ty = (upm - (y1 - y0) * scale) / 2 + y1 * scale
+        pen = TTGlyphPen(None)
+        quad = Cu2QuPen(pen, max_err=upm / 1000.0, reverse_direction=False)
+        transformed = TransformPen(quad, Transform(scale, 0, 0, -scale, tx, ty))
+        for d in paths:
+            parse_path(d, transformed)
+        if name not in order:
+            order.append(name)
+        glyph = pen.glyph()
+        glyph.recalcBounds(glyf)
+        glyf[name] = glyph
+        hmtx[name] = (upm, 0)
+        while any(cp in t.cmap for t in cmap_tables):
+            cp += 1
+        for t in cmap_tables:
+            t.cmap[cp] = name
+        cp += 1
+    f.setGlyphOrder(order)
+    f["maxp"].numGlyphs = len(order)
+    out = Path(out_dir) / "fukiai_rdx.svg.ttf"
+    f.save(str(out))
+    return str(out)
 
 
 def resolve(glyph, cps):
@@ -223,6 +285,7 @@ def main():
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
+    a.font = font_with_custom_svgs(a.font, Path(a.out).parent if a.out else Path.cwd())
     cps = glyph_table(a.font)
     if a.list:
         for name, cp in sorted(cps.items(), key=lambda kv: kv[1]):

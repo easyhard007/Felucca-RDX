@@ -5,7 +5,7 @@
 #undef main
 #include <assert.h>
 
-static void reset(void) { memset(trk,0,sizeof trk); memset(eng_mem_owner,0,sizeof eng_mem_owner); rdx_track_valid=rdx_track_custom=0; host_tracks_init(); }
+static void reset(void) { memset(trk,0,sizeof trk); memset(eng_mem_owner,0,sizeof eng_mem_owner); rdx_track_valid=rdx_track_custom=0; song.octave=0; host_tracks_init(); }
 static void blocks(unsigned n) {
  int32_t o[CTL*2]; while(n--) mix_block(o,CTL);
 }
@@ -58,6 +58,15 @@ int main(void){
  puts("RDX: FULL/LEG, overlap/gap, bidirectional 7/12/24/36/48 semitone glides ok");
  reset();c1h_off=1;host_preset(&trk[0],ENGI_RDX,7);
  assert(trk[0].p[P_GLIDE]==0);puts("RDX: original DynaLead PORTA is zero (no glide) ok");
+ reset();c1h_off=1;host_preset(&trk[0],ENGI_RDX,0);
+ trk[0].p[P_TRANS]=24;song.octave=3;
+ assert(rdx_master_note(&trk[0],60)==120 && rdx_master_note(&trk[0],120)==127);
+ trk_note_on(&trk[0],60,100);
+ {rdx_note_t *n=rdx_note(&trk[0],&trk[0].v[0]);int32_t want=(120+(int32_t)n->patch.common.transpose-64)*65536;
+  assert(n && n->base_pitch==want);blocks(1);assert(n->pitch_target==want);}
+ trk_note_off(&trk[0],60);
+ trk[0].p[P_TRANS]=-24;song.octave=-3;assert(rdx_master_note(&trk[0],5)==0);
+ puts("RDX: HOME transpose + octave reaches every note once and clamps to MIDI 0..127 ok");
  /* Even a zero generic release must defer to the RDX envelope. */
  trk_note_on(&trk[0],60,100);blocks(100);trk[0].p[P_REL]=0;trk_note_off(&trk[0],60);blocks(1);
  assert(trk[0].v[0].active);assert(!rdx_note(&trk[0],&trk[0].v[0])->down);

@@ -133,8 +133,19 @@ static uint32_t kb_pitch(const track_t *t, uint32_t k, int32_t oct)
 {
     static const int8_t DEGREE[12] = {0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6};
     int32_t n = 53 + (int32_t)k;
+#if FELUCCA_RDX
+    /* RDX applies the master transpose and octave once in rdx_note_on, after
+     * every input source has converged.  Keep the panel note here unshifted. */
+    if (eng_idx(t->eng_req) == ENGI_RDX)
+        oct = 0;
+#endif
+    int32_t trans =
+#if FELUCCA_RDX
+        eng_idx(t->eng_req) == ENGI_RDX ? 0 :
+#endif
+        t->p[P_TRANS];
     if (t->p[P_QUANT] == QN_SNAP || t->p[P_QUANT] >= QN_SEQ)   /* SNAP (and SEQ, SEQ+T): every key, rounded down */
-        return (uint32_t)clamp(scale_snap(t, n + 12 * oct + t->p[P_TRANS]), 0, 127);
+        return (uint32_t)clamp(scale_snap(t, n + 12 * oct + trans), 0, 127);
     if (t->p[P_QUANT] == QN_WHITE) {                    /* WHITE: white keys walk the scale, black keys are silent */
         uint32_t mask = scale_mask(t), i;
         int32_t count = 0, degree = DEGREE[n % 12], wo;
@@ -159,7 +170,7 @@ static uint32_t kb_pitch(const track_t *t, uint32_t k, int32_t oct)
             }
         n = 60 + t->p[P_ROOT] + 12 * wo + (int32_t)i;
     }
-    return (uint32_t)clamp(n + 12 * oct + t->p[P_TRANS], 0, 127);
+    return (uint32_t)clamp(n + 12 * oct + trans, 0, 127);
 }
 
 static uint32_t kb_map(const track_t *t, uint32_t k)
@@ -935,6 +946,10 @@ static __attribute__((noinline)) void seq_step(track_t *t, const step_t *s, uint
     const engine_t *e = ENGINES[eng_idx(t->eng_req)];
     uint32_t qseq = t->p[P_QUANT] >= QN_SEQ && !(e->keys && e->keys(t, 0) >= 0);
     int32_t qtrn = qseq && t->p[P_QUANT] == QN_SEQT ? t->p[P_TRANS] : 0;
+#if FELUCCA_RDX
+    if (eng_idx(t->eng_req) == ENGI_RDX)
+        qtrn = 0;                                    /* rdx_note_on applies the master shift once */
+#endif
     if (!(skip & SEQ_REP)) {
         t->rat_left = 0;
         if ((skip & SEQ_MISS) || (!(skip & SEQ_ROLLED) && seq_miss(t, s, idx))) {

@@ -57,15 +57,18 @@ Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\fonts\OFL.txt") -Destina
 if ($LASTEXITCODE -ne 0) { throw "RDX emulator regression failed" }
 
 $siteRoot = Join-Path $root "build\site"
-& python (Join-Path $root "web\make_site.py") (Join-Path $root "build\felucca.fwsc") "rdx-$version" $siteRoot
+& python (Join-Path $root "web\make_site.py") (Join-Path $root "build\felucca.fwsc") "rdx-$version" $siteRoot (Join-Path $root "build\felucca-clean.fwsc")
 if ($LASTEXITCODE -ne 0) { throw "Local web installer generation failed" }
 
-Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root "build\felucca.bin"), (Join-Path $root "build\felucca.fwsc") |
+Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root "build\felucca.bin"), (Join-Path $root "build\felucca.fwsc"), (Join-Path $root "build\felucca-clean.fwsc") |
     Format-Table -AutoSize
 $coreTag = if ($Cpu2) { "dualcore" } else { "singlecore" }
 $namedFirmware = Join-Path $root "build\felucca-rdx-$coreTag.fwsc"
+$namedCleanFirmware = Join-Path $root "build\felucca-rdx-$coreTag-clean.fwsc"
 Copy-Item -Force -LiteralPath (Join-Path $root "build\felucca.fwsc") -Destination $namedFirmware
+Copy-Item -Force -LiteralPath (Join-Path $root "build\felucca-clean.fwsc") -Destination $namedCleanFirmware
 Write-Host "Firmware:  $root\build\felucca.fwsc"
 Write-Host "Named copy: $namedFirmware"
+Write-Host "Fresh install: $namedCleanFirmware"
 Write-Host "Emulator:  $root\build\emu"
 Write-Host "Installer: $root\build\site\webapp\installer"

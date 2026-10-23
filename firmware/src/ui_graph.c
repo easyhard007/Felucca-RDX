@@ -1155,7 +1155,15 @@ static void page_title(char *ti)
             if (i == ui.page)
                 k = n;
         }
-    str_cpy(ti, pt ? pt : grid_on() && !detail_on() ? "GRID" : pg->title, 12);
+#if FELUCCA_RDX
+    if (pg->fam == FAM_FX && (pg->title[0] == 'F') && (pg->title[1] == 'X') &&
+        (pg->title[2] == '1' || pg->title[2] == '2')) {
+        uint32_t slot = pg->title[2] == '2';
+        str_cpy(ti, slot ? "FX2: " : "FX1: ", 8);
+        str_cpy(ti + str_len(ti), RDX_FX_NAMES[rdx_fx_type_of(t, slot)], 10);
+    } else
+#endif
+        str_cpy(ti, pt ? pt : grid_on() && !detail_on() ? "GRID" : pg->title, 12);
     if (n > 1) {
         str_cpy(ti + str_len(ti), " ", 4);
         fmt_int(ti + str_len(ti), (int32_t)k);

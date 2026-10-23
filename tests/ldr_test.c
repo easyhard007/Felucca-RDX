@@ -3,7 +3,7 @@
 /* Host test of the Felucca update loader (firmware/loader/ldr_core.c): a fake
  * host serves a package over the SysEx protocol, the "device" flash starts as
  * another package's flash.bin (as if that firmware were installed).
- *   ldr_test OLD.fwsc NEW.fwsc */
+ *   ldr_test OLD.fwsc NEW.fwsc [NEW-clean.fwsc] */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,8 +84,8 @@ static void ota_commit(const uint8_t *parm) { (void)parm; }
 static int ldr_fread(uint32_t off, void *p, uint32_t n) { memcpy(p, nor + off, n); return 0; }
 static int ldr_erase(uint32_t off)
 {
-    if (off < 0x4000u || off >= 0xFC000u || (off & 0xFFFu) || (off >= 0x97000u && off < 0xE0000u)) bad_range++;
-    if (off < 0x4000u) { printf("ERASE IN THE HEAD %#x\n", off); exit(1); }
+    if (off < 0x4000u || off >= 0xFF000u || (off & 0xFFFu)) bad_range++;
+    if (off < 0x4000u || off >= 0xFF000u) { printf("ERASE IN PROTECTED FLASH %#x\n", off); exit(1); }
     erases++;
     memset(nor + off, 0xFF, 0x1000);
     return 0;
@@ -165,7 +165,7 @@ int main(int argc, char **argv)
     uint8_t *old, head[0x4000];
     uint32_t ofo, nfo, i;
     int bad = 0, rc;
-    if (argc < 3) { printf("usage: ldr_test OLD.fwsc NEW.fwsc\n"); return 2; }
+    if (argc < 3) { printf("usage: ldr_test OLD.fwsc NEW.fwsc [NEW-clean.fwsc]\n"); return 2; }
     old = load_logical(argv[1], &olen);
     logical = load_logical(argv[2], &logical_len);
     ofo = flash_off(old);
@@ -239,6 +239,34 @@ int main(int argc, char **argv)
         rc = ldr_session();
         bad += check("foreign key / damaged app head refused, nothing erased", rc == -6 && erases == 0);
         logical[nfo + 0x4000 + 5] = save;
+    }
+    if (argc >= 4) {
+        uint8_t *clean;
+        size_t clen;
+        uint32_t cfo, a;
+        uint8_t keymac[0x1000];
+        free(logical);
+        clean = load_logical(argv[3], &clen);
+        logical = clean; logical_len = clen; cfo = flash_off(clean);
+        memset(nor, 0xA5, sizeof nor);
+        memcpy(nor, old + ofo, 0x93000);            /* installed head and app, including this chip's key */
+        for (a = 0x97000u; a < 0xE0000u; a++) nor[a] = (uint8_t)(a * 13u + 7u);
+        for (a = 0xE5000u; a < 0xE8000u; a++) nor[a] = (uint8_t)(a * 11u + 3u);
+        for (a = 0xFC000u; a < 0xFF000u; a++) nor[a] = (uint8_t)(a * 5u + 1u);
+        memcpy(keymac, nor + 0xFF000u, sizeof keymac);
+        memcpy(head, nor, sizeof head);
+        erases = bad_range = requests = 0;
+        rc = ldr_session();
+        bad += check("clean install completes", rc == 0);
+        bad += check("clean package app area installed",
+                     !memcmp(nor + LDR_APP_LO, clean + cfo + LDR_APP_LO, LDR_APP_HI - LDR_APP_LO));
+        for (i = 1, a = 0x97000u; a < 0xE0000u; a++) i &= nor[a] == 0xFFu;
+        for (a = 0xE5000u; a < 0xE8000u; a++) i &= nor[a] == 0xFFu;
+        for (a = 0xFC000u; a < 0xFF000u; a++) i &= nor[a] == 0xFFu;
+        bad += check("clean install erases projects, user sounds/samples, autosave, voice bank and settings", i);
+        bad += check("clean install preserves flash head and key/MAC sector",
+                     !memcmp(nor, head, sizeof head) && !memcmp(nor + 0xFF000u, keymac, sizeof keymac));
+        bad += check("clean install never writes outside permitted flash", bad_range == 0);
     }
     printf("%s\n", bad ? "LOADER TEST FAILED" : "loader test passed");
     return bad != 0;

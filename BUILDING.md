@@ -6,7 +6,8 @@ The build makes three files in `build/`:
 | --- | --- |
 | `felucca.bin` | the firmware app |
 | `loader/ota.bin` | the update loader |
-| `felucca.fwsc` | the installable package (app + loader) |
+| `felucca.fwsc` | installable package (app + loader), preserving user data |
+| `felucca-clean.fwsc` | fresh-install package that erases Felucca user data and settings |
 
 ## Get the source
 
@@ -146,7 +147,7 @@ Or, to install your own build from the web installer, make a local copy of the s
 (Web MIDI needs a secure context):
 
 ```
-python3 web/make_site.py build/felucca.fwsc dev /tmp/felucca-site
+python3 web/make_site.py build/felucca.fwsc dev /tmp/felucca-site build/felucca-clean.fwsc
 cd /tmp/felucca-site && python3 -m http.server 8000
 # open http://localhost:8000/webapp/installer/
 ```

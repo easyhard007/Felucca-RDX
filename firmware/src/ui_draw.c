@@ -323,6 +323,57 @@ static void head_group(void)
 }
 static void draw_head(void)
 {
+#if FELUCCA_RDX
+    {
+    /* RDX header: the octave is the central performance status.  Tempo still
+     * exists on CLOCK and through SELECT, but its metronome/BPM group no longer
+     * competes with the pitch control on the persistent header. */
+    static uint32_t rdx_sig;
+    char ob[8], sl[3];
+    uint32_t rec = (song.rec >> song.sel) & 1u ? 2u : song.rec != 0u;
+    uint32_t msg = ui.msg_t || ui.layer;
+    int slot = head_slot(sl);
+    uint32_t sig = rec * 5u + (uint32_t)(song.octave + 4) * 11u +
+                   (ui.msg_t ? str_hash(7u, ui.msg) :
+                    ui.layer * 7919u + (uint32_t)layer_locked() * 3u) +
+                   (uint32_t)batt_shown() * 7777u +
+                   (slot ? str_hash(11u, sl) : 0u) +
+                   (uint32_t)midi_lit(song.sel) * 15485863u;
+    int32_t rx = HEAD_REC_X;
+    if (!ui.force && sig == rdx_sig)
+        return;
+    rdx_sig = sig;
+    ui.head_sig = sig;
+    cv_begin(240, H_HEAD, T_BG);
+    cv_icon_mid(HEAD_TRK_X, H_HEAD / 2, 16, trk_icon(song.sel, 1),
+                midi_lit(song.sel) ? T_TEXT : T_ACCENT, T_BG);
+    if (slot && !msg) {
+        char l[2] = {sl[0], 0};
+        GFX_HOOK_ALIGN(0, 0, 0, H_HEAD, AL_V, "header text on its middle");
+        rx = cv_text(HEAD_SLOT_X, HEAD_MY, &AF_M, l, sl[0] == '-' ? T_MID : T_THEME);
+        if (sl[1])
+            rx = cv_text(rx, HEAD_MY, &AF_M, "*", T_MID);
+        rx += 1;
+    }
+    draw_rec_mark(rx, T_BG);
+    if (msg) {
+        head_msg(-1, HEAD_MSG_W);
+    } else if (song.octave) {
+        int32_t x, w;
+        str_cpy(ob, song.octave > 0 ? "+" : "", sizeof ob);
+        fmt_int(ob + str_len(ob), song.octave);
+        w = text_w(&AF_S, "OCT") + 4 + text_w(&AF_S, ob);
+        x = 120 - HALF_UP(w);
+        GFX_HOOK_ALIGN(0, 0, 240, 0, AL_H, "RDX octave status centred");
+        GFX_HOOK_ALIGN(0, 0, 0, H_HEAD, AL_V, "header text on its middle");
+        x = cv_text(x, HEAD_SY, &AF_S, "OCT", T_MID);
+        cv_text(x + 4, HEAD_SY, &AF_S, ob, T_THEME);
+    }
+    draw_battery(HEAD_BAT_X);
+    cv_blit(0, Y_HEAD);
+    return;
+    }
+#endif
     static int16_t metro_x = -1;                       /* the metronome's ink as drawn (-1: hidden), its beat */
     static int8_t metro_beat;
     char b[16];
@@ -970,6 +1021,89 @@ static void engine_columns(void)
     draw_column(2, "FAV", preset_favorite() ? "ON" : "OFF", "", VAL(2u), -1, ICON_X_STAR);
     draw_column(3, "", "", "", T_THEME, -1, ICON_NONE);
 }
+#if FELUCCA_RDX
+/* RDX's serial-chain overview.  The ordinary four-card layout repeats FX1 / FX2
+ * in every label and leaves too little room for the effect names.  Two themed
+ * group pills span the pairs; below them each knob keeps a compact TYPE / SEND
+ * card whose value uses the same small face as its label. */
+static void draw_rdx_fx_overview(void)
+{
+    char val[4][12], shown[16];
+    const char *unit[4];
+    uint32_t c, sig = ux.gen * 65537u + ux.style * 4099u + ui.hot_col * 131u + (ui.hot_t != 0);
+    static uint32_t last_sig;
+    for (c = 0; c < 4u; c++) {
+        int16_t *vp;
+        const param_desc_t *d = page_desc(cur_page(), c, &vp);
+        param_format(d, *vp, val[c], &unit[c]);
+        if (c == 0u || c == 2u) {
+            /* The general parameter formatter deliberately limits enum labels
+             * to five characters.  These compact cards have room for six, so
+             * show the RDX names without that legacy truncation. */
+            str_cpy(val[c], RDX_FX_NAMES[rdx_fx_type_of(TSEL, c >> 1)], sizeof val[c]);
+        } else if (rdx_fx_type_of(TSEL, c >> 1) == RFX_THRU) {
+            str_cpy(val[c], "-", sizeof val[c]);
+            unit[c] = "";
+        }
+        sig = str_hash(str_hash(sig, d->label), val[c]);
+        sig = str_hash(sig, unit[c]);
+        sig = sig * 16777619u ^ (uint32_t)*vp;
+    }
+    if (!ui.force && sig == last_sig)
+        return;
+    last_sig = sig;
+    cv_begin(RULE_W, CARD_H, T_BG);
+    for (c = 0; c < 2u; c++) {
+        int32_t x = (int32_t)c * 118;
+        const char *title = c ? "FX2" : "FX1";
+        cv_rrect(x, 0, 116, 14, 4, T_KEY, T_BG);
+        GFX_HOOK_ALIGN(x, 0, x + 116, 14, AL_HV, "RDX FX group title centred");
+        cv_text_in(x, CAP_IN(S, 14), 116, &AF_S, title, T_INK, T_KEY);
+    }
+    for (c = 0; c < 4u; c++) {
+        int16_t *vp;
+        const param_desc_t *d = page_desc(cur_page(), c, &vp);
+        int32_t x = (int32_t)c * 59, w;
+        uint16_t lc = c == ui.hot_col && ui.hot_t ? T_ACCENT : T_MID;
+        uint16_t vc = c == ui.hot_col && ui.hot_t ? T_ACCENT : T_THEME;
+        cv_rrect(x, 16, CARD_W, 28, 4, T_SURF, T_BG);
+        GFX_HOOK_ALIGN(x, 16, x + CARD_W, 30, AL_H, "RDX FX card label centred");
+        cv_text_in(x, 16, CARD_W, &AF_S, d->label, lc, T_SURF);
+        str_cpy(shown, val[c], sizeof shown);
+        if (unit[c][0]) {
+            str_cpy(shown + str_len(shown), " ", sizeof shown - str_len(shown));
+            str_cpy(shown + str_len(shown), unit[c], sizeof shown - str_len(shown));
+        }
+        w = ink_w(&AF_S, shown);
+        GFX_HOOK_ALIGN(x, 29, x + CARD_W, 43, AL_HV, "RDX FX card value centred in small face");
+        if (w <= CARD_W - 4)
+            cv_text_in(x, 28, CARD_W, &AF_S, shown, vc, T_SURF);
+        else
+            cv_text_fit(x + 2, 28, &AF_S, shown, vc, T_SURF, CARD_W - 4);
+        ui.roll[c].from[0] = 0;
+        ui.col[c][0] = 0;
+    }
+    cv_blit((uint32_t)CARD_X(0), Y_LABEL);
+}
+
+/* THRU has no editable parameters.  Use the complete card row to say that
+ * directly instead of presenting four empty controls. */
+static void draw_rdx_fx_thru(void)
+{
+    static uint32_t last_sig;
+    uint32_t sig = ux.gen * 65537u + ux.style * 4099u + rdx_fx_detail_slot();
+    if (!ui.force && sig == last_sig)
+        return;
+    last_sig = sig;
+    cv_begin(RULE_W, CARD_H, T_BG);
+    cv_rrect(0, 0, RULE_W, CARD_H, 5, T_SURF, T_BG);
+    GFX_HOOK_ALIGN(0, 3, RULE_W, 19, AL_HV, "RDX THRU title centred");
+    cv_text_in(0, 3, RULE_W, &AF_S, "THRU", T_THEME, T_SURF);
+    GFX_HOOK_ALIGN(0, 20, RULE_W, 41, AL_HV, "RDX THRU explanation centred");
+    cv_text_in(0, 20, RULE_W, &AF_S, "Sound passes through with no effect.", T_MID, T_SURF);
+    cv_blit((uint32_t)CARD_X(0), Y_LABEL);
+}
+#endif
 static void draw_columns(void)
 {
     uint32_t c;
@@ -990,6 +1124,16 @@ static void draw_columns(void)
         }
         return;
     }
+#if FELUCCA_RDX
+    if (rdx_fx_overview()) {
+        draw_rdx_fx_overview();
+        return;
+    }
+    if (rdx_fx_detail_thru()) {
+        draw_rdx_fx_thru();
+        return;
+    }
+#endif
     if (cur_page()->graph == GR_SONG) {             /* SECTION, TRACK, its PAT (A..D, -), REPS (the section's) */
         uint32_t row = ui.song_row < CHAIN_ROWS ? ui.song_row : CHAIN_ROWS - 1u, k = ui.song_trk % NTRK, sl;
         int used = row < chain_config.count;

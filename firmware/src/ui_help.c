@@ -20,6 +20,13 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"LFO 2", "[K1]SYNC TO BPM[LFO]LFO DEST"},
     {"LFO DEST", "[K1-4]LFO AMOUNTS[LFO]MOD"},
     {"MOD", "[K1]SLOT[K2]SOURCE[K3]DEST"},
+#if FELUCCA_RDX
+    {"FX", "[K1,3]TYPE[K2,4]SEND[FX]FX1"},
+    {"FX1", "[K1-4]FX1 PARAMETERS[FX]FX2"},
+    {"FX2", "[K1-4]FX2 PARAMETERS[FX]GLOBAL"},
+    {"GLOBAL FX", "[K1]TYPE[K2]MIX[FX]SLICER"},
+    {"SLICER", "[K1]ON[K2]PATTERN[FX]FX"},
+#else
     {"FX", "[K1-4]SENDS[FX]HOLD: PERFORM"},
     {"SLICER", "[K1]ON[K2]PATTERN[FX]INSERT"},
     {"INSERT", "[K1]TYPE[FX]DRY / WET"},
@@ -27,6 +34,7 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"DLY", "[K1-4]ALL TRACKS[FX]REVERB"},
     {"REVERB", "[K1]ROOM SPRING HALL[FX]CHORUS"},
     {"CHORUS", "[K1-4]ALL TRACKS[FX]FX"},
+#endif
     {"SCL", "[K2]SCALE[K3]QUANTIZE[SCL]CHORDS"},
     {"CHORD", "[K1]CHORD[KEYS]ONE FINGER[SCL]SCL"},
     {"EDIT 1", H_EDIT},

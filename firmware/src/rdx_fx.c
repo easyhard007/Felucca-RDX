@@ -14,11 +14,6 @@
  * FX2 instead of discarding its width there. */
 #if FELUCCA_RDX
 
-enum {
-    RFX_THRU, RFX_DIST, RFX_WAH, RFX_CHORUS,
-    RFX_FLANGER, RFX_PHASER, RFX_DELAY, RFX_REVERB, RFX_N
-};
-
 #define RFX_NSLOT (NTRK * 2u)
 /* RDX's measured Delay table tops out at 52964 samples.  The unused end of
  * Felucca's 65536-sample line hosts the two physical slots' PicoFace stereo
@@ -56,8 +51,11 @@ typedef struct {
     uint32_t pf_alpha[2];                   /* two all-pass coefficients, Q16 */
     uint16_t pf_fl_wp, pf_fl_fill, pf_ph_wp, pf_ph_fill;
     uint16_t ds_wp, ds_fill;
+    uint16_t rv_comb_i[4], rv_ap_i[2], rv_sp_w;
+    int32_t rv_comb_lp[4], rv_sp_lp, rv_sp_hp, rv_sp_he, rv_sp_size;
+    uint32_t rv_sp_ph;
     uint8_t ds_phase;
-    uint8_t type, p1, p2, model, valid;
+    uint8_t type, send, p1, p2, p3, p4, model, valid;
 } rdx_fx_slot_t;
 
 typedef struct {
@@ -82,17 +80,24 @@ static uint32_t rfx_slot_index(const track_t *t, uint32_t slot)
     return ((uint32_t)(t - trk) % NTRK) * 2u + (slot & 1u);
 }
 
-static uint32_t rfx_slot_set(rdx_fx_slot_t *s, uint32_t type, uint32_t p1, uint32_t p2, uint32_t model)
+static uint32_t rfx_slot_set(rdx_fx_slot_t *s, uint32_t type, uint32_t send,
+                             uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4,
+                             uint32_t model)
 {
-    if (s->valid && s->type == type && s->p1 == p1 && s->p2 == p2 && s->model == model)
-        return 0u;
-    memset(s, 0, sizeof *s);
-    s->valid = 1;
+    uint32_t changed = !s->valid || s->type != type || s->model != model ||
+                       (type == RFX_REVERB && s->p1 != p1);
+    if (changed) {
+        memset(s, 0, sizeof *s);
+        s->valid = 1;
+    }
     s->type = (uint8_t)type;
+    s->send = (uint8_t)send;
     s->p1 = (uint8_t)p1;
     s->p2 = (uint8_t)p2;
+    s->p3 = (uint8_t)p3;
+    s->p4 = (uint8_t)p4;
     s->model = (uint8_t)model;
-    return 1u;
+    return changed;
 }
 
 /* Each physical Reface slot owns one complete Felucca HALL.  Slot 0 reuses
@@ -192,6 +197,8 @@ static __attribute__((noinline)) void rfx_dist(rdx_fx_slot_t *s, int32_t *b, uin
     for (i = 0; i < n; i++) {
         int32_t y = gain <= 65536u ? mulq16(b[i], gain) :
                     b[i] + mulq16(b[i], gain - 65536u);
+        uint32_t level = ((uint32_t)s->p3 * 32768u + 50u) / 100u;
+        y = level <= 32768u ? mulq15(y, (int32_t)level) : y + mulq15(y, (int32_t)level - 32768);
         b[i] = clamp(y, -262143, 262143);
     }
 }
@@ -312,10 +319,11 @@ static __attribute__((noinline)) void rfx_delay(rdx_fx_slot_t *s, int32_t *b, ui
     int16_t *line = dly_buf;
     uint32_t i;
     uint32_t dl = rfx_delay_samples(s->p2);
-    int32_t send = (int32_t)rfx_delay_send(s->p1) * 258;
-    int32_t fb = (int32_t)rfx_delay_feedback(s->p1) * 230;
-    int32_t col = 2000 + (int32_t)RFX_DLY_COLOR * 240;
-    int32_t mix = (int32_t)RFX_DLY_MIX * 258;
+    uint32_t wet = (uint32_t)s->p1 * 9u / 5u;
+    int32_t send = (int32_t)s->send * 258;
+    int32_t fb = (int32_t)s->p3 * 230;
+    int32_t col = 2000 + (int32_t)s->p4 * 240;
+    int32_t mix = (int32_t)(wet > 127u ? 127u : wet) * 258;
     int32_t xmax;
     if (si != rfx_delay_owner || !send)
         return;
@@ -348,14 +356,88 @@ static uint32_t rfx_reverb_size(uint32_t time)
     return size > 127u ? 127u : size;
 }
 
+/* Parameterised copies of Felucca's ROOM and SPRING kernels.  The arithmetic
+ * and delay lengths are unchanged; only their state is moved into an RDX slot
+ * so FX1 and FX2 can select different models without sharing indices. */
+static __attribute__((noinline)) void rfx_rev_room(rdx_fx_slot_t *s, const int32_t *in,
+                                                   int32_t *out, uint32_t n,
+                                                   int16_t *comb, int16_t *ap,
+                                                   int32_t size_v, int32_t damp_v)
+{
+    uint32_t i, k;
+    int32_t size = 25000 + size_v * 50, damp = 32767 - damp_v * 200;
+    for (i = 0; i < n; i++) {
+        int32_t a = 0;
+        int16_t *c = comb;
+        int32_t x = mulq15(in[i], 2580);
+        for (k = 0; k < 4u; k++) {
+            int32_t o = c[s->rv_comb_i[k]];
+            s->rv_comb_lp[k] = o + mulq15(s->rv_comb_lp[k] - o, 32767 - damp);
+            c[s->rv_comb_i[k]] = (int16_t)clamp(x + mulq15(s->rv_comb_lp[k], size), -32768, 32767);
+            if (++s->rv_comb_i[k] >= REV_COMB[k]) s->rv_comb_i[k] = 0;
+            a += o;
+            c += REV_COMB[k];
+        }
+        c = ap;
+        for (k = 0; k < 2u; k++) {
+            int32_t o = c[s->rv_ap_i[k]], v = a + (o >> 1);
+            c[s->rv_ap_i[k]] = (int16_t)clamp(v, -32768, 32767);
+            a = o - a;
+            if (++s->rv_ap_i[k] >= REV_AP[k]) s->rv_ap_i[k] = 0;
+            c += REV_AP[k];
+        }
+        out[i] += a;
+    }
+}
+
+static __attribute__((noinline)) void rfx_rev_spring(rdx_fx_slot_t *s, const int32_t *in,
+                                                     int32_t *out, uint32_t n,
+                                                     int16_t *line, int32_t *ap,
+                                                     int32_t size_v, int32_t damp_v)
+{
+    uint32_t i, k, sz = (uint32_t)size_v;
+    int32_t g = 19661 + (int32_t)sz * 85;
+    int32_t kl = 26000 - damp_v * 160;
+    int32_t len = (int32_t)(1323u + ((sz * 1323u) >> 7)) << 8, L, L2, L3, f, w;
+    if (!s->rv_sp_size) s->rv_sp_size = len;
+    s->rv_sp_size += clamp(len - s->rv_sp_size, -256, 256);
+    L = s->rv_sp_size >> 8;
+    s->rv_sp_ph += 2u * LFO_INC[24];
+    w = (s->rv_sp_size >> 1) + ((osc_sine(s->rv_sp_ph) * 3) >> 8);
+    L2 = w >> 8; f = w & 255; L3 = (L * 3) >> 2;
+    for (i = 0; i < n; i++) {
+        uint32_t wp = s->rv_sp_w, j = (wp & 3u) * (SP_N + 1u);
+        int32_t x = mulq15(in[i], 2580), r = line[(wp - (uint32_t)L) & SP_MASK], p, o;
+        int32_t t0 = line[(wp - (uint32_t)L2) & SP_MASK];
+        int32_t t1 = line[(wp - (uint32_t)L2 - 1u) & SP_MASK];
+        s->rv_sp_lp += mulq15(r - s->rv_sp_lp, kl);
+        o = s->rv_sp_lp * g;
+        x += (o + ((o >> 31) & 32767)) >> 15;
+        o = x - s->rv_sp_hp + s->rv_sp_he;
+        s->rv_sp_he = o & 63;
+        s->rv_sp_hp += o >> 6;
+        x -= s->rv_sp_hp;
+        p = ap[j]; ap[j] = x;
+        for (k = 1; k <= SP_N; k++) {
+            int32_t v = (x - ap[j + k]) * SP_A;
+            o = ap[j + k];
+            x = ((v + ((v >> 31) & 4095)) >> 12) + p;
+            p = o; ap[j + k] = x;
+        }
+        line[wp & SP_MASK] = (int16_t)clamp(x, -32768, 32767);
+        s->rv_sp_w = (uint16_t)(wp + 1u);
+        out[i] += (t0 + (((t1 - t0) * f) >> 8)) * 4 + line[(wp - (uint32_t)L3) & SP_MASK] * 2;
+    }
+}
+
 static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32_t slot,
                                                         int32_t *l, int32_t *r, uint32_t n)
 {
     int16_t *comb = slot ? rdx_rev_comb2 : rev_comb;
     int16_t *ap = slot ? rdx_rev_u2.ap : rev_ap;
     hall_t *h = slot ? &rdx_hl2 : &hl;
-    uint32_t i, value = rfx_reverb_send(s->p1);
-    int32_t send, xmax, size = (int32_t)rfx_reverb_size(s->p2);
+    uint32_t i, value = s->send;
+    int32_t send, xmax, size = (int32_t)rfx_reverb_size(s->p3), damp = s->p4;
     if (!value)
         return;
     send = (int32_t)value * 258;                       /* Felucca send 0 .. 42, Q15 */
@@ -365,11 +447,20 @@ static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32
         rfx_work.in[i] = mulq15(clamp(mid, -xmax, xmax), send);
         rfx_work.wet[i] = 0;
     }
-    rev_hall_core(rfx_work.in, rfx_work.wet, n, comb, ap, h, size, HALL_DAMP, h->sd);
-    rdx_rev_size = (uint8_t)size;                       /* INFO/browser diagnostic: last HALL run */
+    h->side = 0;
+    if (s->p1 == 0u)
+        rfx_rev_room(s, rfx_work.in, rfx_work.wet, n, comb, ap, size, damp);
+    else if (s->p1 == 1u)
+        rfx_rev_spring(s, rfx_work.in, rfx_work.wet, n, comb,
+                       slot ? rdx_rev_u2.sp : rev_u.sp, size, damp);
+    else
+        rev_hall_core(rfx_work.in, rfx_work.wet, n, comb, ap, h, size, damp, h->sd);
+    rdx_rev_size = (uint8_t)size;
     for (i = 0; i < n; i++) {
-        l[i] += rfx_work.wet[i] + h->sd[i];             /* HALL mid/side reconstructed before FX2 */
-        r[i] += rfx_work.wet[i] - h->sd[i];
+        int32_t wet = mulq15(rfx_work.wet[i], (int32_t)s->p2 * 258);
+        int32_t side = h->side ? mulq15(h->sd[i], (int32_t)s->p2 * 258) : 0;
+        l[i] += wet + side;
+        r[i] += wet - side;
     }
 }
 
@@ -383,7 +474,9 @@ static __attribute__((noinline)) void rfx_chorus_serial(rdx_fx_slot_t *s, int32_
 {
     uint32_t i;
     uint32_t depth = s->p1 >> 1;                       /* Reface DEPTH -> half Felucca pitch excursion */
-    int32_t send = RFX_CHORUS_SEND * 258;
+    int32_t send = (int32_t)s->send * 258;
+    if (!send)
+        return;
     int32_t xmax = 0x7FFFFFFF / send;
     for (i = 0; i < n; i++) {
         int32_t mid = (l[i] >> 1) + (r[i] >> 1);
@@ -418,8 +511,8 @@ static __attribute__((noinline)) void rfx_delay_stereo(rdx_fx_slot_t *s, int32_t
 
 static uint32_t rdx_fx_has_effect(const track_t *t)
 {
-    const rdx_patch_t *p = rdx_track_get((uint32_t)(t - trk));
-    return (p->common.effects[0][0] & 7u) || (p->common.effects[1][0] & 7u);
+    return (rdx_fx_type_of(t, 0u) && rdx_fx_send_of(t, 0u)) ||
+           (rdx_fx_type_of(t, 1u) && rdx_fx_send_of(t, 1u));
 }
 
 /* Select the one full-length delay-line owner before either core renders a
@@ -428,13 +521,11 @@ static uint32_t rdx_fx_has_effect(const track_t *t)
  * serial chain instead of corrupting the shared line. */
 static uint32_t rfx_delay_slot_for_track(uint32_t tr)
 {
-    const rdx_patch_t *p = rdx_track_get(tr);
     uint32_t k;
     if (trk[tr].engine != ENGI_RDX)
         return 2u;
     for (k = 0; k < 2u; k++)
-        if ((p->common.effects[k][0] & 7u) == RFX_DELAY &&
-            (p->common.effects[k][1] & 127u))
+        if (rdx_fx_type_of(&trk[tr], k) == RFX_DELAY && rdx_fx_send_of(&trk[tr], k))
             return k;
     return 2u;
 }
@@ -484,7 +575,6 @@ static void rdx_fx_delay_prepare(void)
 static uint32_t rdx_fx_continue(track_t *t, uint32_t voices)
 {
     rdx_fx_track_t *f = &rdx_fx[(uint32_t)(t - trk) % NTRK];
-    const rdx_patch_t *p = rdx_track_get((uint32_t)(t - trk));
     uint32_t k, tail = 0;
     if (!rdx_fx_has_effect(t)) {
         f->tail = 0;
@@ -492,9 +582,10 @@ static uint32_t rdx_fx_continue(track_t *t, uint32_t voices)
     }
     if (voices) {
         for (k = 0; k < 2u; k++) {
-            uint32_t ty = p->common.effects[k][0] & 7u;
-            uint32_t v = ty == RFX_DELAY ? 2500u + p->common.effects[k][1] * 55u :
-                         ty == RFX_REVERB ? 2500u + rfx_reverb_size(p->common.effects[k][2]) * 70u : 64u;
+            int16_t *p = rdx_fx_values(t, k);
+            uint32_t ty = rdx_fx_type_of(t, k);
+            uint32_t v = ty == RFX_DELAY ? 2500u + (uint32_t)p[1] * 55u :
+                         ty == RFX_REVERB ? 2500u + rfx_reverb_size((uint32_t)p[2]) * 70u : 64u;
             if (v > tail) tail = v;
         }
         f->tail = (uint16_t)(tail > 12000u ? 12000u : tail);   /* at most 8.7 seconds */
@@ -502,11 +593,20 @@ static uint32_t rdx_fx_continue(track_t *t, uint32_t voices)
     return f->tail != 0u;
 }
 
+static void rfx_blend_insert(rdx_fx_slot_t *s, uint32_t n)
+{
+    uint32_t i;
+    int32_t mix = (int32_t)s->send * 258;
+    for (i = 0; i < n; i++) {
+        rfx_work.l[i] = rfx_work.in[i] + mulq15(rfx_work.l[i] - rfx_work.in[i], mix);
+        rfx_work.r[i] = rfx_work.wet[i] + mulq15(rfx_work.r[i] - rfx_work.wet[i], mix);
+    }
+}
+
 static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
                                                    uint32_t n, uint32_t voices)
 {
     uint32_t k, tr = (uint32_t)(t - trk) % NTRK;
-    const rdx_patch_t *p = rdx_track_get(tr);
     rdx_fx_track_t *f = &rdx_fx[tr];
     for (k = 0; k < n; k++) {
         rfx_work.l[k] = b[k];
@@ -518,16 +618,29 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         return;
 #endif
     for (k = 0; k < 2u; k++) {
-        uint32_t ty = p->common.effects[k][0] & 7u;
-        uint32_t p1 = p->common.effects[k][1] & 127u;
-        uint32_t p2 = p->common.effects[k][2] & 127u;
+        int16_t *pv = rdx_fx_values(t, k);
+        uint32_t ty = rdx_fx_type_of(t, k);
+        uint32_t send = rdx_fx_send_of(t, k);
+        uint32_t p1 = (uint32_t)clamp(pv[0], 0, 127);
+        uint32_t p2 = (uint32_t)clamp(pv[1], 0, 127);
+        uint32_t p3 = (uint32_t)clamp(pv[2], 0, 127);
+        uint32_t p4 = (uint32_t)clamp(pv[3], 0, 127);
         uint32_t si = rfx_slot_index(t, k);
         rdx_fx_slot_t *s = &f->slot[k];
         uint32_t model = ty == RFX_PHASER ? rdx_phaser_model_get() :
                          ty == RFX_FLANGER ? rdx_flanger_model_get() : 0u;
-        uint32_t changed = rfx_slot_set(s, ty, p1, p2, model);
+        uint32_t changed = rfx_slot_set(s, ty, send, p1, p2, p3, p4, model);
         if (changed)
             rfx_hall_clear(k);                          /* no old-patch HALL tail in this physical slot */
+        if (!send || ty == RFX_THRU)
+            continue;
+        if (ty >= RFX_DIST && ty <= RFX_PHASER && ty != RFX_CHORUS) {
+            uint32_t i;
+            for (i = 0; i < n; i++) {
+                rfx_work.in[i] = rfx_work.l[i];
+                rfx_work.wet[i] = rfx_work.r[i];
+            }
+        }
         switch (ty) {
         case RFX_DIST:
             rfx_dist(s, rfx_work.l, n, 0u);
@@ -565,6 +678,8 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
             break;
         default: break;
         }
+        if (ty >= RFX_DIST && ty <= RFX_PHASER && ty != RFX_CHORUS)
+            rfx_blend_insert(s, n);
     }
     for (k = 0; k < n; k++) {
         b[k] = (rfx_work.l[k] >> 1) + (rfx_work.r[k] >> 1);

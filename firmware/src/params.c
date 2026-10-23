@@ -46,6 +46,43 @@ static const char *const N_VOICE[] = {"POLY", "MONO", "LEG", "UNI"};   /* V_POLY
 static const char *const N_RDX_VOICE[] = {"POLY", "M-FULL", "M-LEG"};
 static const param_desc_t RDX_VOICE_DESC = {"VCE", F_ENUM, 0, 2, 0, N_RDX_VOICE, 0};
 static const param_desc_t RDX_PORTA_DESC = {"PORTA", F_INT, 0, 127, 0, 0, 0};
+static const param_desc_t RDX_TRANS_DESC = {"Trans.", F_SEMI, -24, 24, 0, 0, 0};
+static const char *const N_RDX_GLOBAL[] = {"OFF", "TYPE1", "TYPE2"};
+static const char *const N_RDX_REVERB[] = {"ROOM", "SPRING", "HALL"};
+static const param_desc_t RDX_FX1_TYPE_DESC = {"TYPE", F_ENUM, 0, RFX_N - 1, 0, RDX_FX_NAMES, 0};
+static const param_desc_t RDX_FX2_TYPE_DESC = {"TYPE", F_ENUM, 0, RFX_N - 1, 0, RDX_FX_NAMES, 0};
+static const param_desc_t RDX_FX1_SEND_DESC = {"SEND", F_PCT, 0, 127, 0, 0, 0};
+static const param_desc_t RDX_FX2_SEND_DESC = {"SEND", F_PCT, 0, 127, 0, 0, 0};
+static const param_desc_t RDX_GLOBAL_TYPE_DESC = {"TYPE", F_ENUM, 0, 2, 0, N_RDX_GLOBAL, 0};
+static const param_desc_t RDX_GLOBAL_MIX_DESC = {"MIX", F_PCT, 0, 127, 0, 0, 0};
+static const param_desc_t RDX_REVERB_TYPE_DESC = {"TYPE", F_ENUM, 0, 2, 2, N_RDX_REVERB, 0};
+static const param_desc_t RDX_DRIVE_DESC = {"DRIVE", F_PCT, 0, 127, 24, 0, 0};
+static const param_desc_t RDX_TONE_DESC = {"TONE", F_CUTOFF, 0, 127, 64, 0, 0};
+static const param_desc_t RDX_LEVEL_DESC = {"LEVEL", F_PCT, 0, 127, 100, 0, 0};
+static const param_desc_t RDX_SENS_DESC = {"SENS", F_PCT, 0, 127, 64, 0, 0};
+static const param_desc_t RDX_REZ_DESC = {"REZ", F_PCT, 0, 127, 64, 0, 0};
+static const param_desc_t RDX_DEPTH_DESC = {"DEPTH", F_PCT, 0, 127, 64, 0, 0};
+static const param_desc_t RDX_RATE_DESC = {"RATE", F_LFOHZ, 0, 127, 40, 0, 0};
+static const param_desc_t RDX_TIME_DESC = {"TIME", F_PCT, 0, 127, 64, 0, 0};
+static const param_desc_t RDX_FDBK_DESC = {"FDBK", F_PCT, 0, 120, 60, 0, 0};
+static const param_desc_t RDX_COLOR_DESC = {"COLOR", F_PCT, 0, 127, 70, 0, 0};
+static const param_desc_t RDX_DAMP_DESC = {"DAMP", F_PCT, 0, 127, 60, 0, 0};
+
+static const param_desc_t *rdx_fx_param_desc(uint32_t type, uint32_t k)
+{
+    static const param_desc_t *const dist[4] = {&RDX_DRIVE_DESC, &RDX_TONE_DESC, &RDX_LEVEL_DESC, 0};
+    static const param_desc_t *const wah[4] = {&RDX_SENS_DESC, &RDX_REZ_DESC, 0, 0};
+    static const param_desc_t *const swept[4] = {&RDX_DEPTH_DESC, &RDX_RATE_DESC, 0, 0};
+    static const param_desc_t *const delay[4] = {&RDX_DEPTH_DESC, &RDX_TIME_DESC, &RDX_FDBK_DESC, &RDX_COLOR_DESC};
+    static const param_desc_t *const reverb[4] = {&RDX_REVERB_TYPE_DESC, &RDX_DEPTH_DESC, &RDX_TIME_DESC, &RDX_DAMP_DESC};
+    const param_desc_t *const *d = 0;
+    if (type == RFX_DIST) d = dist;
+    else if (type == RFX_WAH) d = wah;
+    else if (type == RFX_CHORUS || type == RFX_FLANGER || type == RFX_PHASER) d = swept;
+    else if (type == RFX_DELAY) d = delay;
+    else if (type == RFX_REVERB) d = reverb;
+    return d && k < 4u ? d[k] : 0;
+}
 #endif
 static const char *const N_GLMODE[] = {"RATE", "TIME"};
 static const char *const N_PRIO[] = {"LAST", "LOW", "HIGH"};
@@ -168,6 +205,10 @@ static const param_desc_t TP[P_COUNT] = {
     [P_IB] = PD("INS B", F_PCT, 0, 127, 96),
     [P_IC] = PD("INS C", F_PCT, 0, 127, 96),
     [P_IMIX] = PD("MIX", F_PCT, 0, 127, 127),
+    [P_RFX2_A] = PD("FX2 A", F_PCT, 0, 127, 0),
+    [P_RFX2_B] = PD("FX2 B", F_PCT, 0, 127, 0),
+    [P_RFX2_C] = PD("FX2 C", F_PCT, 0, 127, 0),
+    [P_RFX2_D] = PD("FX2 D", F_PCT, 0, 127, 0),
     [P_FTYPE] = PE("TYPE", N_FTYPE, 0),           /* 1.5 (#104): ANALOG's filter, LP = as before (eng_analog.c) */
     [P_ESYNC] = PE("ESYNC", N_ONOFF, 0),          /* 1.5 (#175): OFF = ATK DEC REL in ms, as before (voice.c esync) */
 };
@@ -197,7 +238,7 @@ static const param_desc_t GP[G_COUNT] = {
     [G_DFDBK] = PD("FDBK", F_PCT, 0, 120, 60),
     [G_DCOLOR] = PD("COLR", F_PCT, 0, 127, 70),
     [G_DMIX] = PD("MIX", F_PCT, 0, 127, 90),
-    [G_RSIZE] = PD("SIZE", F_PCT, 0, 127, 90),
+    [G_RSIZE] = PD("SIZE", F_PCT, 0, 127, FELUCCA_RDX ? 0 : 90),
     [G_RDAMP] = PD("DAMP", F_PCT, 0, 127, 60),
     [G_CRATE] = PD("CRT", F_LFOHZ, 0, 127, 40),
     [G_CDEPTH] = PD("CDP", F_PCT, 0, 127, 60),
@@ -219,7 +260,7 @@ static const param_desc_t GP[G_COUNT] = {
     [G_CLRSEQ] = PE("CLRSQ", N_GO, 0),
     [G_INITSND] = PE("INIT", N_GO, 0),
     /* the reverb's model on the REVERB page: the id of the old GM drum channel (G_DRCH, inert since 1.0) */
-    [G_RTYPE] = PE("TYPE", N_RTYPE, 2),         /* HALL at power-on since 1.2 (ROOM before; projects keep theirs) */
+    [G_RTYPE] = PE("TYPE", N_RTYPE, FELUCCA_RDX ? 0 : 2), /* RDX reuses it for the inert GLOBAL FX page */
     /* inert: they set the GM drum part (level, reverb send), which is gone (drums are the DRUM engine
      * on any part). On no page; kept so the ids and G_COUNT, which the project format and the
      * editor protocol depend on, do not move */
@@ -230,10 +271,22 @@ static const param_desc_t GP[G_COUNT] = {
 static const param_desc_t *track_desc(const track_t *t, uint32_t id)
 {
 #if FELUCCA_RDX
+    if (eng_idx(t->eng_req) == ENGI_RDX) {
+        if (id == P_DIST) return &RDX_FX1_TYPE_DESC;
+        if (id == P_CHOR) return &RDX_FX1_SEND_DESC;
+        if (id == P_DLY) return &RDX_FX2_TYPE_DESC;
+        if (id == P_REV) return &RDX_FX2_SEND_DESC;
+        if (id >= P_ITYPE && id <= P_IC)
+            return rdx_fx_param_desc(rdx_fx_type_of(t, 0), id - P_ITYPE);
+        if (id >= P_RFX2_A && id <= P_RFX2_D)
+            return rdx_fx_param_desc(rdx_fx_type_of(t, 1), id - P_RFX2_A);
+    }
     if (id == P_VOICE && eng_idx(t->eng_req) == ENGI_RDX)
         return &RDX_VOICE_DESC;
     if (id == P_GLIDE && eng_idx(t->eng_req) == ENGI_RDX)
         return &RDX_PORTA_DESC;
+    if (id == P_TRANS && eng_idx(t->eng_req) == ENGI_RDX)
+        return &RDX_TRANS_DESC;
 #endif
     if (id >= P_E0 && id <= P_E7) {                   /* the engine asked for (t->engine follows after a fade) */
         const engine_t *e = ENGINES[eng_idx(t->eng_req)];
@@ -461,13 +514,21 @@ static const page_t PAGES[] = {
     {"LFO 2", FAM_LFO, SC_TRACK, GR_LFO, {P_LSYNC, P_LTRIG, P_LPOL, 0xFF}},   /* 1.2: SYNC TRIG POL */
     {"LFO DEST", FAM_LFO, SC_TRACK, GR_NONE, {P_LD_PIT, P_LD_FLT, P_LD_SHP, P_LD_AMP}},
     {"MOD", FAM_LFO, SC_TRACK, GR_MOD, {0xFF, P_M1SRC, P_M1DST, P_M1AMT}},   /* KNOB 1: the slot (mod_ui_slot) */
+#if FELUCCA_RDX
+    {"FX", FAM_FX, SC_TRACK, GR_NONE, {P_DIST, P_CHOR, P_DLY, P_REV}},
+    {"FX1", FAM_FX, SC_TRACK, GR_NONE, {P_ITYPE, P_IA, P_IB, P_IC}},
+    {"FX2", FAM_FX, SC_TRACK, GR_NONE, {P_RFX2_A, P_RFX2_B, P_RFX2_C, P_RFX2_D}},
+    {"GLOBAL FX", FAM_FX, SC_GLOBAL, GR_NONE, {G_RTYPE, G_RSIZE, 0xFF, 0xFF}},
+    {"SLICER", FAM_FX, SC_TRACK, GR_SLCR, {P_SLCR, P_SLPAT, P_SLRATE, P_SLDEPTH}},
+#else
     {"FX", FAM_FX, SC_TRACK, GR_FX, {P_DIST, P_CHOR, P_DLY, P_REV}},
     {"SLICER", FAM_FX, SC_TRACK, GR_SLCR, {P_SLCR, P_SLPAT, P_SLRATE, P_SLDEPTH}},
-    {"INSERT", FAM_FX, SC_TRACK, GR_INS, {P_ITYPE, P_IA, P_IB, P_IC}},   /* 1.5: the track's INSERT (fx.c) */
-    {"INSERT 2", FAM_FX, SC_TRACK, GR_INS, {P_IMIX, 0xFF, 0xFF, 0xFF}},  /* .. its dry / wet */
+    {"INSERT", FAM_FX, SC_TRACK, GR_INS, {P_ITYPE, P_IA, P_IB, P_IC}},
+    {"INSERT 2", FAM_FX, SC_TRACK, GR_INS, {P_IMIX, 0xFF, 0xFF, 0xFF}},
     {"DLY", FAM_FX, SC_GLOBAL, GR_NONE, {G_DTIME, G_DFDBK, G_DCOLOR, G_DMIX}},
-    {"REVERB", FAM_FX, SC_GLOBAL, GR_NONE, {G_RTYPE, G_RSIZE, G_RDAMP, 0xFF}},   /* TYPE: ROOM / SPRING / HALL */
+    {"REVERB", FAM_FX, SC_GLOBAL, GR_NONE, {G_RTYPE, G_RSIZE, G_RDAMP, 0xFF}},
     {"CHORUS", FAM_FX, SC_GLOBAL, GR_NONE, {G_CRATE, G_CDEPTH, 0xFF, 0xFF}},
+#endif
     {"SCL", FAM_SCL, SC_TRACK, GR_SCALE, {P_ROOT, P_SCALE, P_QUANT, P_TRANS}},
     {"CHORD", FAM_SCL, SC_TRACK, GR_CHORD, {P_CHRD, P_VOIC, 0xFF, 0xFF}},   /* SCL again: the chord keys (chord.c) */
     {"EDIT 1", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E0, P_E1, P_E2, P_E3}},
@@ -535,10 +596,18 @@ static const param_desc_t *page_desc(const page_t *pg, uint32_t slot, int16_t **
     }
     if (pg->scope == SC_GLOBAL) {
         *valp = &song.g[id];
+#if FELUCCA_RDX
+        if (pg->fam == FAM_FX && pg->title[0] == 'G')
+            return id == G_RTYPE ? &RDX_GLOBAL_TYPE_DESC : &RDX_GLOBAL_MIX_DESC;
+#endif
         return &GP[id];
     }
     if (pg->graph == GR_MOD)                          /* SRC DST AMT of the slot shown */
         id += 3u * mod_ui_slot;
     *valp = &TSEL->p[id];
-    return track_desc(TSEL, id);
+    {
+        const param_desc_t *d = track_desc(TSEL, id);
+        if (!d) *valp = 0;
+        return d;
+    }
 }

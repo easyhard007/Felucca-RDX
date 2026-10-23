@@ -112,7 +112,20 @@ for (let i = 0; i < 24; i++) {
   if (!c) break;
   firmwareVersion += String.fromCharCode(c);
 }
-check("RDX firmware identifies itself as Felucca RDX 0.6.1", firmwareVersion === "RDX 0.6.1");
+check("RDX firmware identifies itself as Felucca RDX 0.6.7", firmwareVersion === "RDX 0.6.7");
+check("HOME knob 4 is the Trans. master transpose control",
+      d.ex.web_test_rdx_home_knob4_is_transpose() === 1 &&
+      cstr(d.ex.web_test_rdx_home_label_byte, 0) === "Trans." &&
+      d.ex.web_test_rdx_home_icon_is_transpose() === 1);
+check("RDX header is empty at octave zero and shows octave only when shifted",
+      d.ex.web_test_rdx_header_center_ink(0) === 0 &&
+      d.ex.web_test_rdx_header_center_ink(1) > 0 &&
+      d.ex.web_test_rdx_header_center_ink(-1) > 0);
+check("master transpose and octave add once and clamp to MIDI note boundaries",
+      d.ex.web_test_rdx_master_note(60, 0, 0) === 60 &&
+      d.ex.web_test_rdx_master_note(60, 24, 3) === 120 &&
+      d.ex.web_test_rdx_master_note(120, 24, 3) === 127 &&
+      d.ex.web_test_rdx_master_note(5, -24, -3) === 0);
 check("sound-set registry contains Factory and Selected",
       d.ex.web_test_rdx_set_count() === 2 &&
       cstr(d.ex.web_test_rdx_set_name_byte, 0) === "Factory" &&
@@ -126,6 +139,20 @@ check("Selected set has 21 imported SysEx entries",
       d.ex.web_test_rdx_set_preset(1, 0) === 35 &&
       cstr(d.ex.web_test_rdx_preset_name_byte, 35) === "Ph.D Brass" &&
       cstr(d.ex.web_test_rdx_preset_name_byte, 55) === "Transistor");
+check("FX opens exactly FX, FX1, FX2, GLOBAL FX and SLICER in that order",
+      d.ex.web_test_rdx_fx_page_count() === 5 &&
+      ["FX", "FX1", "FX2", "GLOBAL FX", "SLICER"].every((name, i) =>
+        cstr(d.ex.web_test_rdx_fx_page_name_byte, i) === name));
+d.ex.web_test_rdx_preset(2);                          // MotionPad: CHORUS -> DELAY
+check("preset FX bytes initialise the live serial type/send controls",
+      d.ex.web_test_rdx_fx_live(0, 0) === 3 &&
+      d.ex.web_test_rdx_fx_live(0, 1) === 20 &&
+      d.ex.web_test_rdx_fx_live(1, 0) === 6);
+check("FX1 and FX2 parameter labels follow their selected effect types",
+      cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(0, slot, pos), 0) === "DEPTH" &&
+      cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(0, slot, pos), 1) === "RATE" &&
+      cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(1, slot, pos), 2) === "FDBK" &&
+      cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(1, slot, pos), 3) === "COLOR");
 check("an old autosave cannot force DynaLead back to polyphony",
       d.ex.web_test_rdx_restore_stale_voice(4) === 1);
 const restoredLegend = d.ex.web_test_rdx_restore_stale_slot();

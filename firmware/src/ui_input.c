@@ -1041,11 +1041,31 @@ static void edit_param(uint32_t slot, int32_t steps)
         mod_ui_slot = (uint8_t)clamp((int32_t)mod_ui_slot + (steps > 0 ? 1 : -1), 0, 3);
         return;
     }
+#if FELUCCA_RDX
+    /* On the overview, SEND belongs to the TYPE immediately to its left.
+     * THRU has no wet path, so its dash is informational and the knob is
+     * intentionally inert. */
+    if (TSEL->engine == ENGI_RDX && rdx_fx_overview() && (slot == 1u || slot == 3u) &&
+        rdx_fx_type_of(TSEL, slot >> 1) == RFX_THRU)
+        return;
+#endif
     d = page_desc(pg, slot, &vp);
     if (!d || !vp || d->max == d->min)
         return;
+    {
+        int16_t old = *vp;
     v = param_turn(d, *vp, accel(EN_K1 + slot, steps, d->fmt == F_ENUM ? 0 : d->max - d->min));
     *vp = (int16_t)v;
+#if FELUCCA_RDX
+        if (TSEL->engine == ENGI_RDX && old != *vp) {
+            uint32_t id = pg->scope == SC_GLOBAL ? P_COUNT : (uint32_t)(vp - TSEL->p);
+            if (id == P_DIST)
+                rdx_fx_type_changed(TSEL, 0u, (uint32_t)*vp);
+            else if (id == P_DLY)
+                rdx_fx_type_changed(TSEL, 1u, (uint32_t)*vp);
+        }
+#endif
+    }
     if (pg->scope != SC_GLOBAL) {
         uint32_t id = (uint32_t)(vp - TSEL->p);
 #if FELUCCA_RDX

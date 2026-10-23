@@ -10,6 +10,15 @@
 
 #define RDX_POLY 8u
 
+enum {
+    RFX_THRU, RFX_DIST, RFX_WAH, RFX_CHORUS,
+    RFX_FLANGER, RFX_PHASER, RFX_DELAY, RFX_REVERB, RFX_N
+};
+static const char *const RDX_FX_NAMES[RFX_N] = {
+    "THRU", "DIST", "WAH", "CHORUS", "FLANGE", "PHASER", "DELAY", "REVERB"
+};
+#define RDX_FX_MARK 126
+
 typedef struct __attribute__((packed)) {
     uint8_t voice_name[10], reserved1[2], transpose, mono_poly, porta_time, pb_range;
     uint8_t algorithm, lfo_wave, lfo_speed, lfo_delay, lfo_pmd;
@@ -82,6 +91,8 @@ static uint8_t rdx_track_slot[NTRK], rdx_track_custom, rdx_track_valid;
  * the audio envelope still supplies the touch-sensitive part of the sweep. */
 static volatile uint8_t rdx_touch_wah_pos[NTRK] = {64};
 static const rdx_patch_t *rdx_track_get(uint32_t tr);
+static uint32_t rdx_fx_type_of(const track_t *t, uint32_t slot);
+static uint32_t rdx_fx_send_of(const track_t *t, uint32_t slot);
 /* MENU > SYSTEM > RDX TYPE.  Kept outside the settings byte because the
  * engine is compiled before ui.c in Felucca's single translation unit. */
 static uint8_t rdx_type = 1u;                 /* OPTIMIZED is the default for a fresh or upgraded unit */
@@ -101,13 +112,9 @@ static void rdx_flanger_model_set(uint32_t model) { rdx_flanger_model = (uint8_t
 
 static uint32_t rdx_touch_wah_active(const track_t *t)
 {
-    const rdx_patch_t *p;
-    uint32_t tr;
     if (t < &trk[0] || t >= &trk[NTRK] || t->eng_req != ENGI_RDX)
         return 0;
-    tr = (uint32_t)(t - trk);
-    p = rdx_track_get(tr);
-    return p->common.effects[0][0] == 2u || p->common.effects[1][0] == 2u;
+    return rdx_fx_type_of(t, 0u) == RFX_WAH || rdx_fx_type_of(t, 1u) == RFX_WAH;
 }
 
 static uint32_t rdx_touch_wah_get(const track_t *t)
@@ -215,6 +222,90 @@ static void rdx_mode_apply(track_t *t, const rdx_patch_t *p)
     t->p[P_GLIDE] = p->common.porta_time;
 }
 
+static int16_t *rdx_fx_values(track_t *t, uint32_t slot)
+{
+    return slot ? &t->p[P_RFX2_A] : &t->p[P_ITYPE];
+}
+
+static uint32_t rdx_fx_type_of(const track_t *t, uint32_t slot)
+{
+    return (uint32_t)clamp(t->p[slot ? P_DLY : P_DIST], RFX_THRU, RFX_REVERB);
+}
+
+static uint32_t rdx_fx_send_of(const track_t *t, uint32_t slot)
+{
+    return (uint32_t)clamp(t->p[slot ? P_REV : P_CHOR], 0, 127);
+}
+
+static uint32_t rdx_fx_default_send(uint32_t type, uint32_t depth)
+{
+    depth &= 127u;
+    if (type == RFX_THRU)
+        return 0u;
+    if (type == RFX_CHORUS)
+        return 20u;
+    if (type == RFX_DELAY)
+        return (depth * 3u + 2u) / 5u;
+    if (type == RFX_REVERB)
+        return depth / 3u;
+    return 127u;
+}
+
+/* Fill the four live controls from the three bytes in a Reface patch.  The
+ * extra controls expose values that were fixed in the first RDX firmware:
+ * Delay feedback / colour and Reverb model / damping. */
+static void rdx_fx_slot_defaults(track_t *t, uint32_t slot, uint32_t type,
+                                 uint32_t p1, uint32_t p2)
+{
+    int16_t *v = rdx_fx_values(t, slot);
+    uint32_t send_id = slot ? P_REV : P_CHOR;
+    uint32_t type_id = slot ? P_DLY : P_DIST;
+    uint32_t fb;
+    type = type < RFX_N ? type : RFX_THRU;
+    p1 &= 127u;
+    p2 &= 127u;
+    t->p[type_id] = (int16_t)type;
+    t->p[send_id] = (int16_t)rdx_fx_default_send(type, p1);
+    v[0] = v[1] = v[2] = v[3] = 0;
+    switch (type) {
+    case RFX_DIST:    v[0] = (int16_t)p1; v[1] = (int16_t)p2; v[2] = 100; break;
+    case RFX_WAH:     v[0] = (int16_t)p1; v[1] = (int16_t)p2; break;
+    case RFX_CHORUS:
+    case RFX_FLANGER:
+    case RFX_PHASER:  v[0] = (int16_t)p1; v[1] = (int16_t)p2; break;
+    case RFX_DELAY:
+        fb = (p1 * 6u + 2u) / 5u;
+        v[0] = (int16_t)p1; v[1] = (int16_t)p2;
+        v[2] = (int16_t)(fb > 120u ? 120u : fb); v[3] = 70;
+        break;
+    case RFX_REVERB:
+        v[0] = 2; v[1] = 127; v[2] = (int16_t)p2; v[3] = 60;
+        break;
+    default: break;
+    }
+    t->p[P_IMIX] = RDX_FX_MARK;
+}
+
+static void rdx_fx_from_patch(track_t *t, const rdx_patch_t *p)
+{
+    uint32_t k;
+    for (k = 0; k < 2u; k++)
+        rdx_fx_slot_defaults(t, k, p->common.effects[k][0],
+                             p->common.effects[k][1], p->common.effects[k][2]);
+}
+
+/* A type selected on page 1 gets useful neutral parameters immediately.
+ * This also prevents THRU's zero send from making the newly selected effect
+ * appear broken. */
+static void rdx_fx_type_changed(track_t *t, uint32_t slot, uint32_t type)
+{
+    uint32_t p1 = 64u, p2 = 64u;
+    if (type == RFX_DIST) p1 = 24u;
+    if (type == RFX_CHORUS) p2 = 40u;
+    if (type == RFX_REVERB) p2 = 60u;
+    rdx_fx_slot_defaults(t, slot, type, p1, p2);
+}
+
 static const rdx_patch_t *rdx_track_get(uint32_t tr)
 {
     tr %= NTRK;
@@ -258,6 +349,7 @@ static void rdx_track_loaded(track_t *t)
     rdx_track_set(tr, (const rdx_patch_t *)RDX_PATCHES[slot].patch, 0);
     rdx_track_slot[tr] = (uint8_t)slot;
     rdx_mode_apply(t, rdx_track_get(tr));
+    rdx_fx_from_patch(t, rdx_track_get(tr));
 }
 
 /* Project and user-preset records predate the 150-byte RDX patch and therefore
@@ -267,12 +359,29 @@ static void rdx_track_loaded(track_t *t)
 static void rdx_track_restored(track_t *t)
 {
     uint32_t slot = t->preset;
+    int keep_fx = t->p[P_IMIX] == RDX_FX_MARK;
+    int16_t saved[13];
+    uint32_t i;
+    if (keep_fx) {
+        saved[0] = t->p[P_DIST]; saved[1] = t->p[P_CHOR];
+        saved[2] = t->p[P_DLY];  saved[3] = t->p[P_REV];
+        for (i = 0; i < 5u; i++) saved[4u + i] = t->p[P_ITYPE + i];
+        for (i = 0; i < 4u; i++) saved[9u + i] = t->p[P_RFX2_A + i];
+    }
     /* A project stores both preset and P_E7.  The preset id is the sound the
      * user selected; force PATCH to it before copying the current firmware's
      * complete 150-byte factory/SysEx data. */
     if (slot < RDX_NPATCHES && rdx_preset_visible(slot))
         t->p[P_E7] = (int16_t)slot;
+    if (t->eng_req != ENGI_RDX)
+        return;
     rdx_track_loaded(t);
+    if (keep_fx) {
+        t->p[P_DIST] = saved[0]; t->p[P_CHOR] = saved[1];
+        t->p[P_DLY] = saved[2];  t->p[P_REV] = saved[3];
+        for (i = 0; i < 5u; i++) t->p[P_ITYPE + i] = saved[4u + i];
+        for (i = 0; i < 4u; i++) t->p[P_RFX2_A + i] = saved[9u + i];
+    }
 }
 
 static void rdx_sysex_patch_set(uint32_t tr, const rdx_patch_t *p)
@@ -280,6 +389,7 @@ static void rdx_sysex_patch_set(uint32_t tr, const rdx_patch_t *p)
     track_t *t = &trk[tr % NTRK];
     rdx_track_set(tr, p, 1);
     rdx_mode_apply(t, rdx_track_get(tr));
+    rdx_fx_from_patch(t, rdx_track_get(tr));
 }
 
 static void rdx_patch_for_track(uint32_t tr, rdx_patch_t *out)
@@ -632,12 +742,24 @@ static uint32_t rdx_algorithm(const track_t *t, const rdx_patch_t *p)
     return a ? (uint32_t)clamp(a - 1, 0, 11) : p->common.algorithm % 12u;
 }
 
+/* The RDX build is one instrument, so its track transpose and the panel octave
+ * form one master pitch control.  Apply it inside the engine: every source
+ * (panel keys, MIDI, arp and sequencer) follows it, while voice ownership and
+ * note-off matching keep the original note and cannot hang if the control is
+ * changed while a key is held. */
+static uint32_t rdx_master_note(const track_t *t, uint32_t note)
+{
+    int32_t trans = clamp(t->p[P_TRANS], -24, 24);
+    int32_t octave = clamp(song.octave, -3, 3);
+    return (uint32_t)clamp((int32_t)note + trans + octave * 12, 0, 127);
+}
+
 static void rdx_note_on(track_t *t, voice_t *v)
 {
     rdx_note_t *n = rdx_note(t, v);
     const rdx_patch_t *p;
     uint32_t slot = (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPATCHES - 1);
-    uint32_t k, carrier_index = 0, carriers, base_inc, vel_q8;
+    uint32_t k, carrier_index = 0, carriers, base_inc, vel_q8, note;
     int32_t old_out, old_pitch;
     int was_live;
     if (!n)
@@ -658,7 +780,8 @@ static void rdx_note_on(track_t *t, voice_t *v)
     n->transition_pending = (uint8_t)was_live;  /* retrigger/steal: join the old waveform */
     n->algorithm = (uint8_t)rdx_algorithm(t, p);
     rdx_note_cache(n);
-    n->base_pitch = ((int32_t)v->note + (int32_t)p->common.transpose - 64) * 65536;
+    note = rdx_master_note(t, v->note);
+    n->base_pitch = ((int32_t)note + (int32_t)p->common.transpose - 64) * 65536;
     n->pitch_target = n->base_pitch;
     if ((was_live || old_pitch) && p->common.mono_poly == 1u && p->common.porta_time) {
         n->pitch = old_pitch;
@@ -667,12 +790,12 @@ static void rdx_note_on(track_t *t, voice_t *v)
         n->pitch = n->pitch_target;
     n->peg = 64 << 16;
     rdx_peg_enter(n, RDX_PEG_ATTACK);
-    n->lfo_random = 0xA5A5A5A5u ^ v->age ^ ((uint32_t)v->note << 24);
+    n->lfo_random = 0xA5A5A5A5u ^ v->age ^ (note << 24);
     n->lfo_sh_step = 0xFFu;
     n->lfo_fade_total = RDX_LFO_DELAY_SAMPLES[p->common.lfo_delay & 127u] / 3u;
     n->lfo_fade = p->common.lfo_delay ? 0u : 32768u;
     carriers = RDX_CARRIERS[n->algorithm];
-    base_inc = pitch_inc(clamp((int32_t)v->note * 16 + ((int32_t)p->common.transpose - 64) * 16, 0, 2047));
+    base_inc = pitch_inc(clamp((int32_t)note * 16 + ((int32_t)p->common.transpose - 64) * 16, 0, 2047));
     vel_q8 = rdx_note_velocity_q8;
     if (!vel_q8)
         vel_q8 = (uint32_t)(v->mvel ? v->mvel : v->vel) << 8;
@@ -687,8 +810,8 @@ static void rdx_note_on(track_t *t, voice_t *v)
             spread = SPREAD[carrier_index++] * (int32_t)t->p[P_E6] * 12 / 127;
         }
         o->inc = rdx_op_inc(q, base_inc, ratio_macro, spread);
-        o->out_gain = rdx_output_gain(q, vel_q8, level_macro, t->p[P_E5], v->note);
-        o->rate_offset = (uint8_t)rdx_rate_offset(v->note, q->rate_scaling);
+        o->out_gain = rdx_output_gain(q, vel_q8, level_macro, t->p[P_E5], note);
+        o->rate_offset = (uint8_t)rdx_rate_offset(note, q->rate_scaling);
         o->stage = RDX_ATTACK;
         o->target = RDX_ENV_TARGET_Q16[q->eg_level[0] & 127u];
         o->rising = 1;
@@ -783,7 +906,7 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
     norm = alg < 5u ? 32768u : alg < 8u ? 23170u : alg < 11u ? 18919u : 16384u;
     rate_macro = t->p[P_E4];
     fb_macro = t->p[P_E1];
-    target = v->pitch16 * 4096 + ((int32_t)p->common.transpose - 64) * 65536;
+    target = ((int32_t)rdx_master_note(t, v->note) + (int32_t)p->common.transpose - 64) * 65536;
     if (target != n->pitch_target) {                    /* LEGATO note-on or held-note fallback */
         n->pitch_target = target;
         if (p->common.mono_poly && p->common.porta_time)
@@ -962,7 +1085,7 @@ static const engine_t ENG_RDX = {
     .npresets = NELEM(RDX_PRESETS),
     .note_on = rdx_note_on,
     .render = rdx_render,
-    .knob = {P_E2, P_E3, P_E1, P_E7},
+    .knob = {P_E2, P_E3, P_E1, P_TRANS},
     .poly = RDX_POLY,
     .ownenv = 1,
     .done = rdx_done,

@@ -261,7 +261,7 @@ static __attribute__((noinline)) void rdx_render_optimized(track_t *t, voice_t *
             n->fb_scale[k] = RDX_FEEDBACK_Q16[clamp((int32_t)p->op[k].feedback + fb_macro, 0, 127)];
     }
 
-    target = v->pitch16 * 4096 + ((int32_t)p->common.transpose - 64) * 65536;
+    target = ((int32_t)rdx_master_note(t, v->note) + (int32_t)p->common.transpose - 64) * 65536;
     if (target != n->pitch_target) {
         n->pitch_target = target;
         if (p->common.mono_poly && p->common.porta_time)

@@ -14,10 +14,11 @@
  *   2b. reads the whole flash.bin once and checks it against the CRC16 of its
  *      UFW entry (the vendor tools' check), keeping each app sector's CRC16:
  *      a damaged or truncated package is refused before anything is erased;
- *   3. writes ONLY the app area [0x4000, 0x93000), sector by sector, skipping
+ *   3. writes the app area [0x4000, 0x93000), sector by sector, skipping
  *      sectors that are already equal, and verifies each one; a sector that
  *      comes in different from the checked pass is read again, never written;
- *      the flash head (SPL, isd_config) is never written;
+ *      the flash head (SPL, isd_config) is never written.  A package carrying
+ *      the clean-install marker then erases Felucca's user stores and settings;
  *   4. asks 0xF0000000 ("success"), then invalidates the update record (RAM
  *      and flash: 4K boundary - 256 between 0x93000 and 0xFC000, outside
  *      Felucca's store, where only user data lives) so the SPL boots the new
@@ -37,12 +38,17 @@
 #define LDR_DATA_LO 0x97000u                    /* the stock firmware's: 0xE8F00), never in Felucca's store, whose */
 #define LDR_DATA_HI 0xE0000u                    /* bytes (user samples) the host writes */
 #define LDR_NSEC ((LDR_APP_HI - LDR_APP_LO) >> 12)
+#define LDR_CLEAN_OFF 0x920A0u
+#define LDR_CLEAN_SFC_OFF (LDR_CLEAN_OFF - LDR_APP_LO)
+#define LDR_CLEAN_N 16u
 
 static int ldr_fread(uint32_t off, void *p, uint32_t n);
 static int ldr_erase(uint32_t off);
 static int ldr_prog(uint32_t off, const void *p, uint32_t n);
 static void ldr_record_clear(void);
 static void ldr_progress(uint32_t done, uint32_t total);
+
+static const uint8_t ldr_clean_magic[LDR_CLEAN_N] = "FELUCCA-CLEAN-1!";
 
 /* SFC cipher: per 32-byte block, key ^ (block offset >> 2) */
 static void ldr_sfc(uint8_t *p, uint32_t n, uint32_t base_off, uint32_t key)
@@ -111,7 +117,7 @@ static int ldr_session(void)
     static uint8_t hdr[0x400], sec[0x1000], cur[0x1000];
     static uint16_t sc[LDR_NSEC];
     uint32_t i, k, fl_off, fl_size, ota_off, ota_len, key, s, want = ~0u, done = 0;   /* (no CRC16: no flash.bin entry) */
-    int rc;
+    int rc, clean = 0;
     /* 1. UFW header + entry list (ota.c; it leaves the entries decoded in hdr) */
     if ((rc = ota_ufw(hdr, &fl_off, &fl_size, &ota_off, &ota_len)) != 0)
         return rc;
@@ -133,6 +139,10 @@ static int ldr_session(void)
     /* 2b. the whole package first: nothing is erased for a damaged one */
     if ((rc = ldr_check(fl_off, fl_size, want, sc, sec)) != 0)
         return rc;
+    if (ota_read(fl_off + LDR_CLEAN_OFF, sec, 32))
+        return -7;
+    ldr_sfc(sec, 32, LDR_CLEAN_SFC_OFF, key);
+    clean = ota_memeq(sec, ldr_clean_magic, LDR_CLEAN_N);
     /* 3. app area, sector by sector */
     for (s = LDR_APP_LO; s < LDR_APP_HI; s += 0x1000u) {
         uint32_t again;
@@ -170,6 +180,26 @@ static int ldr_session(void)
     for (i = 0; i < 4u; i++)
         if (!ota_read(0xF0000000u, sec, 8))
             break;
+    if (clean) {
+        /* Projects, user presets/samples and their first mirror. */
+        for (s = 0x97000u; s < 0xE0000u; s += 0x1000u) {
+            if (ldr_erase(s))
+                return -15;
+            ldr_progress(s - 0x97000u, 0x6F000u);
+        }
+        /* Autosave, voice bank, settings A/B and the preset mirror.  The
+         * key/MAC sector at 0xFF000 is deliberately never touched. */
+        for (s = 0xE5000u; s < 0xE8000u; s += 0x1000u) {
+            if (ldr_erase(s))
+                return -15;
+            ldr_progress(0x69000u + s - 0xE5000u, 0x6F000u);
+        }
+        for (s = 0xFC000u; s < 0xFF000u; s += 0x1000u) {
+            if (ldr_erase(s))
+                return -15;
+            ldr_progress(0x6C000u + s - 0xFC000u, 0x6F000u);
+        }
+    }
     ldr_record_clear();
     for (s = LDR_REC_HI; s > LDR_REC_LO; s -= 0x1000u) {   /* flash records: 4K boundary - 256 */
         uint8_t r[80];

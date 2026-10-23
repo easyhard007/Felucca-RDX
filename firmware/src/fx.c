@@ -4,6 +4,11 @@
  * shared buses (chorus, tempo delay, reverb). Mono buses, stereo dry mix. */
 #define DLY_LEN 65536u           /* 1.49 s: 1/4 fits from 41 BPM, 1/4D from 61, 1/2 from 81 */
 #define CHO_LEN 2048u
+#if FELUCCA_RDX
+#define RDX_TRACK(t) ((t)->engine == ENGI_RDX)
+#else
+#define RDX_TRACK(t) 0
+#endif
 static int16_t dly_buf[DLY_LEN] __attribute__((section(".pool")));
 static int16_t cho_buf[CHO_LEN] __attribute__((section(".pool")));
 static const uint16_t REV_COMB[4] = {1116, 1188, 1277, 1356};
@@ -899,14 +904,18 @@ static __attribute__((noinline)) void mix_spread(track_t *t, int32_t *b, uint32_
     int32_t gla = 4096 - (pa > 0 ? pa * 64 : 0), gra = 4096 + (pa < 0 ? pa * 64 : 0);
     int32_t glb = 4096 - (pb > 0 ? pb * 64 : 0), grb = 4096 + (pb < 0 ? pb * 64 : 0);
     int32_t glm = (gla + glb) >> 1, grm = (gra + grb) >> 1, gld = (gla - glb) >> 1, grd = (gra - grb) >> 1;
-    int32_t c = t->p[P_CHOR] * 258, dl = t->p[P_DLY] * 258, r = t->p[P_REV] * 258, pk = t->peak;
+    int32_t c = RDX_TRACK(t) ? 0 : t->p[P_CHOR] * 258;
+    int32_t dl = RDX_TRACK(t) ? 0 : t->p[P_DLY] * 258;
+    int32_t r = RDX_TRACK(t) ? 0 : t->p[P_REV] * 258, pk = t->peak;
     int32_t xmax = c > dl ? c : dl;
     xmax = 0x7FFFFFFF / ((xmax > r ? xmax : r) | 1);
     for (i = 0; i < n; i++)
         d[i] = (d[i] << 1) - b[i];                      /* left - right */
-    track_dist(t, b, n);
-    if (t->p[P_ITYPE] | t->ins_run)
-        track_insert(t, b, n);                          /* (the mono sum, as DIST) */
+    if (!RDX_TRACK(t)) {
+        track_dist(t, b, n);
+        if (t->p[P_ITYPE] | t->ins_run)
+            track_insert(t, b, n);                      /* (the mono sum, as DIST) */
+    }
     slicer_track_sd(t, b, d, n);
     if ((pf.mute >> (t - trk)) & 1u)
         perf_mute_sd((uint32_t)(t - trk), b, d, n);
@@ -960,9 +969,9 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
         uint32_t native_tail = 0u;
 #endif
     if (nr)
-        t->tail = t->p[P_ITYPE] ? 64 : 16;              /* blocks of DIST / INSERT state to run out after the last
+        t->tail = RDX_TRACK(t) ? 16 : t->p[P_ITYPE] ? 64 : 16; /* blocks of DIST / INSERT state to run out after the last
                                                          * voice (the INSERT's: 46 ms, a flanger's feedback) */
-    else if (!native_tail && (!t->tail || !(t->p[P_DIST] | t->p[P_ITYPE]) || !--t->tail) && !slicer_busy(t)) {
+    else if (!native_tail && (!t->tail || (!RDX_TRACK(t) && !(t->p[P_DIST] | t->p[P_ITYPE])) || !--t->tail) && !slicer_busy(t)) {
         slicer_track(t, 0, n);                          /* (the SLICER's step clock runs on) */
         if (t->ins_run && !t->p[P_ITYPE])
             ins_rest(t);                                /* TYPE OFF while silent: no fade-out left for the next note */
@@ -978,12 +987,25 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
     if (T_SPREAD(t))
         mix_spread(t, b, n SM_ARG(sm));
     else {
-        track_dist(t, b, n);
-        if (t->p[P_ITYPE] | t->ins_run)
-            track_insert(t, b, n);                      /* the INSERT (1.5): off, nothing */
-        slicer_track(t, b, n);                          /* slicer.c: before the level, pan and sends */
-        if ((pf.mute >> (t - trk)) & 1u)
-            perf_mute((uint32_t)(t - trk), b, n);       /* perform.c: a black key in the FX layer */
+        if (!RDX_TRACK(t)) {
+            track_dist(t, b, n);
+            if (t->p[P_ITYPE] | t->ins_run)
+                track_insert(t, b, n);                  /* the INSERT (1.5): off, nothing */
+        }
+#if FELUCCA_RDX
+        if (RDX_TRACK(t))
+            slicer_track_sd(t, b, rfx_work.side, n);    /* gate both channels of the serial stereo chain */
+        else
+#endif
+            slicer_track(t, b, n);                      /* slicer.c: before the level, pan and sends */
+        if ((pf.mute >> (t - trk)) & 1u) {
+#if FELUCCA_RDX
+            if (RDX_TRACK(t))
+                perf_mute_sd((uint32_t)(t - trk), b, rfx_work.side, n);
+            else
+#endif
+                perf_mute((uint32_t)(t - trk), b, n);   /* perform.c: a black key in the FX layer */
+        }
     }
 #if FELUCCA_RDX
     if (t->engine == ENGI_RDX)
@@ -993,7 +1015,9 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
                                                          * them, no spill in the loop: the ISR's cost as before 1.5) */
         int32_t lvl = LEVEL_Q12[t->p[P_LEVEL] & 127], pan = t->p[P_PAN];
         int32_t gl = 4096 - (pan > 0 ? pan * 64 : 0), gr = 4096 + (pan < 0 ? pan * 64 : 0);
-        int32_t c = t->p[P_CHOR] * 258, d = t->p[P_DLY] * 258, r = t->p[P_REV] * 258, pk = t->peak;
+        int32_t c = RDX_TRACK(t) ? 0 : t->p[P_CHOR] * 258;
+        int32_t d = RDX_TRACK(t) ? 0 : t->p[P_DLY] * 258;
+        int32_t r = RDX_TRACK(t) ? 0 : t->p[P_REV] * 258, pk = t->peak;
         int32_t xmax = c > d ? c : d;
         xmax = 0x7FFFFFFF / ((xmax > r ? xmax : r) | 1);   /* sends: loud chords at a high LEVEL */
         for (i = 0; i < n; i++) {
@@ -1012,7 +1036,7 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
         }
         t->peak = pk;
     }
-    if (pf.thr)
+    if (pf.thr && !RDX_TRACK(t))
         perf_throw(t, b, SM(d), SM(v), n);              /* perform.c: REV / ECHO THROW (1.5.1), the sends towards full */
     if (MOD(t).on)
         mod_end(t);                                     /* the stored values back */

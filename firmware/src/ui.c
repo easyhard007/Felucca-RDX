@@ -412,9 +412,38 @@ static const page_t *cur_page(void) { return page_over ? page_over : &PAGES[ui.p
  *            is, the card labels in M;
  *   LK_OFF   LARGE off; the menu (its own LARGE: ui_menu.c), the dialogs and NAME keep their own layout in every case. */
 enum { LK_OFF, LK_LABEL, LK_TALL };
+#if FELUCCA_RDX
+static int rdx_fx_overview(void)
+{
+    const page_t *p = cur_page();
+    return !ui.home && !ui.layer && p->fam == FAM_FX && p->title[0] == 'F' && p->title[1] == 'X' && !p->title[2];
+}
+/* The two detail pages keep their physical slot number in the title.  Returning
+ * 1 / 2 (rather than a zero-based index) lets zero continue to mean "not an
+ * RDX FX detail page". */
+static uint32_t rdx_fx_detail_slot(void)
+{
+    const page_t *p = cur_page();
+    if (!ui.home && !ui.layer && p->fam == FAM_FX && p->title[0] == 'F' && p->title[1] == 'X' &&
+        (p->title[2] == '1' || p->title[2] == '2') && !p->title[3])
+        return (uint32_t)(p->title[2] - '0');
+    return 0u;
+}
+static int rdx_fx_detail_thru(void)
+{
+    uint32_t slot = rdx_fx_detail_slot();
+    return slot && rdx_fx_type_of(TSEL, slot - 1u) == RFX_THRU;
+}
+#endif
 static uint32_t large_kind(void)
 {
     uint32_t g;
+#if FELUCCA_RDX
+    /* Its two group headings and four compact two-line cards are already the
+     * accessible layout; keep it intact when DISPLAY > LARGE is enabled. */
+    if (rdx_fx_overview() || rdx_fx_detail_thru())
+        return LK_OFF;
+#endif
     if (!(ui_prefs & PREF_LARGE))
         return LK_OFF;
     if (ui.layer)

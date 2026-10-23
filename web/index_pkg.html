@@ -37,6 +37,8 @@
   <p class="small"><span data-t="brick"></span>
     <a href="https://github.com/kurogedelic/FM-1-transporter" target="_blank" rel="noopener" style="color:inherit">FM-1-transporter</a></p>
   <p><button id="go" disabled data-t="install"></button></p>
+  <p class="small"><label><input id="clean-install" type="checkbox"> <span data-t="cleanInstall"></span></label><br>
+    <span data-t="cleanWarn"></span></p>
   <details style="margin-top:24px">
     <summary data-t="stockTitle"></summary>
     <p class="small" data-t="back"></p>
@@ -64,6 +66,9 @@ const TEXT = {
     intro: "FM-1 を USB で接続してください。（Chrome か Edge で使えます）",
     warn: "書き込み中は USB を抜かないでください。",
     install: "インストール", other: "English",
+    cleanInstall: "新規インストール（ユーザーデータを消去）",
+    cleanWarn: "保存したプロジェクト、ユーザー音色、サンプル、自動保存、システム設定をすべて消去します。",
+    cleanConfirm: "新規インストールを実行します。保存したプロジェクト、ユーザー音色、サンプル、自動保存、システム設定はすべて消去されます。続けますか？",
     editor: "エディタ（インストール後、パソコンから音色やシーケンスを編集）",
     direct: "USB ケーブルはパソコンに直接つないでください。Probe や Transporter などの機材は不要です。",
     brick: "万一インストールに失敗して起動しなくなった場合は、復旧に Transporter が必要です:",
@@ -95,6 +100,9 @@ const TEXT = {
     intro: "Connect the FM-1 by USB. (Works in Chrome or Edge.)",
     warn: "Do not unplug the USB cable while writing.",
     install: "Install", other: "日本語",
+    cleanInstall: "Fresh install (erase all user data)",
+    cleanWarn: "Erases saved projects, user voices, samples, autosave data and all system settings.",
+    cleanConfirm: "Fresh install will erase saved projects, user voices, samples, autosave data and all system settings. Continue?",
     editor: "Editor (after installing: edit sounds and sequences from the computer)",
     direct: "Connect the USB cable directly to the computer. No probe or Transporter is needed.",
     brick: "If an install fails and the FM-1 no longer starts, recovering it needs a Transporter:",
@@ -137,21 +145,23 @@ applyLang();
 const sayK = (k, arg = "") => { lastKey = k; lastArg = arg; $("status").textContent = t(k) + arg; };
 const say = (txt) => { lastKey = null; $("status").textContent = txt; };
 const log = (t) => { $("log").textContent += t + "\n"; };
-let image = null;
+let image = null, cleanImage = null;
 const meta = /*META*/;
 
 let writing = false, stock = null, stockFileEpoch = 0;
-const lockInstaller = (on) => { writing = on; $("go").disabled = on || !image; $("stock-go").disabled = on || !stock; $("stock-file").disabled = on; $("stock-recovery").disabled = on; };
+const lockInstaller = (on) => { writing = on; $("go").disabled = on || !image || !cleanImage; $("clean-install").disabled = on; $("stock-go").disabled = on || !stock; $("stock-file").disabled = on; $("stock-recovery").disabled = on; };
 window.addEventListener("beforeunload", (e) => { if (writing) { e.preventDefault(); e.returnValue = t("leave"); } });
 
 (async () => {
   if (!navigator.requestMIDIAccess) { sayK("nomidi"); return; }
   try {
-    const r = await fetch(meta.pkg);
+    const [r, cr] = await Promise.all([fetch(meta.pkg, {cache:"no-store"}), fetch(meta.cleanPkg, {cache:"no-store"})]);
     if (!r.ok) throw new Error(`${meta.pkg}: HTTP ${r.status}`);
-    const pkg = new Uint8Array(await r.arrayBuffer());
-    if (productOf(pkg) !== meta.product) { sayK("badpkg"); return; }
-    image = logicalImage(pkg);
+    if (!cr.ok) throw new Error(`${meta.cleanPkg}: HTTP ${cr.status}`);
+    const [pkg, cleanPkg] = await Promise.all([
+      r.arrayBuffer().then(b => new Uint8Array(b)), cr.arrayBuffer().then(b => new Uint8Array(b))]);
+    if (productOf(pkg) !== meta.product || productOf(cleanPkg) !== meta.product) { sayK("badpkg"); return; }
+    image = logicalImage(pkg); cleanImage = logicalImage(cleanPkg);
     say(`Felucca ${meta.version}`);
     $("go").disabled = false;
   } catch (e) { sayK("loadfail", e.message); }
@@ -159,6 +169,9 @@ window.addEventListener("beforeunload", (e) => { if (writing) { e.preventDefault
 
 $("go").addEventListener("click", async () => {
   if (writing) return;
+  const fresh = $("clean-install").checked;
+  if (fresh && !confirm(t("cleanConfirm"))) return;
+  const installImage = fresh ? cleanImage : image;
   lockInstaller(true);
   let midi;
   try { midi = await navigator.requestMIDIAccess({ sysex: true }); }
@@ -178,9 +191,9 @@ $("go").addEventListener("click", async () => {
     const ota = await up.find((id) => /^ota-/i.test(id.model));
     if (ota) {
       ota.link.close();
-      sayK((await up.resume(image, step, meta.product)) ? "done" : "stopped");
+      sayK((await up.resume(installImage, step, meta.product)) ? "done" : "stopped");
     } else {
-      await up.install(image, meta.product, step);
+      await up.install(installImage, meta.product, step);
     }
   } catch (e) {
     if (e && e.code && TEXT[lang][e.code]) sayK(e.code, e.detail || "");

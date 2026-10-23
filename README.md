@@ -5,7 +5,7 @@ eight-voice, four-operator synthesizer inspired by the Yamaha reface DX. It is
 based on the open-source Felucca firmware, but the product UI exposes only the
 RDX instrument and its sound sets.
 
-The current firmware version is **Felucca RDX 0.6.1**. RDX is monotimbral: the
+The current firmware version is **Felucca RDX 0.6.7**. RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
@@ -22,10 +22,14 @@ Current features include:
 - fixed-point PicoFaceDX Phaser-RDX and Flanger-RDX algorithms, with the
   original Felucca models retained for A/B comparison;
 - five MIDI velocity curves with Q8.8 velocity inside the RDX engine.
+- a HOME `Trans.` control (±24 semitones) and centred nonzero ±3-octave status shared
+  by panel, MIDI, arpeggiator and sequencer notes.
 
 The primary build output is `build/felucca.fwsc`. It can be loaded by the
 [FM-1 emulator](https://joakimeriksson.github.io/fm1-emu/?fw=local&mhz=100)
 or installed on an FM-1 through the generated local Web MIDI installer.
+The build also produces `build/felucca-clean.fwsc`; this fresh-install package
+erases saved projects, user voices and samples, autosave data and system settings.
 
 See [GUIDE.md](GUIDE.md) for the build, simulator and installation workflow.
 
