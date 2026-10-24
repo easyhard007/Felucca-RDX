@@ -1,8 +1,8 @@
 # RDX sound sets
 
 The source Yamaha reface DX bulk SysEx files used to generate the `Selected`
-sound set are kept in the maintainer's local library and are not distributed
-in this repository. The generated fixed-size patch records are committed in
+sound set are kept in the maintainer's local library and are not included in
+the current source tree. The generated fixed-size patch records are committed in
 `firmware/src/felucca_rdx_data.h` and compiled directly into the firmware.
 
 `tools/gen_rdx_data.py` validates every SysEx message header, model, length, address and Yamaha checksum, then extracts the 38-byte common block and four 28-byte operator blocks. Display names come from the ten-byte voice name stored inside each SysEx file.

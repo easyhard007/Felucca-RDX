@@ -92,7 +92,7 @@ def main() -> None:
     ap.add_argument("reference", type=Path, help="components/rdx_reface directory")
     ap.add_argument("output", type=Path)
     ap.add_argument("--selected", type=Path, required=True,
-                    help="local directory containing the Selected .syx sound set (not distributed)")
+                    help="local directory containing the Selected .syx sound set (not kept in the source tree)")
     ap.add_argument("--gain-calibration", type=Path,
                     default=Path(__file__).resolve().parents[1] / "assets/rdx/gain-db.json",
                     help="measured per-preset output gain calibration")
