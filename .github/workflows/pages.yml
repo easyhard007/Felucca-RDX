@@ -2,7 +2,7 @@ name: Build firmware and deploy Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/rdx-editor]
   workflow_dispatch:
 
 permissions:
