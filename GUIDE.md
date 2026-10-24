@@ -19,7 +19,7 @@
 在 PowerShell 中运行：
 
 ```powershell
-git clone --recurse-submodules https://github.com/easyhard007/Felucca-RDX.git
+git clone https://github.com/easyhard007/Felucca-RDX.git
 cd Felucca-RDX
 .\build-rdx.ps1
 ```

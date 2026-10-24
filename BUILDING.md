@@ -11,16 +11,15 @@ The build makes three files in `build/`:
 
 ## Get the source
 
-Five engines are in a git submodule (`firmware/engines/`, [Felucca-Engines](https://github.com/hugelton/Felucca-Engines),
-MIT), so clone with `--recurse-submodules`:
+The five shared engines and their DSP helpers are vendored in `firmware/engines/`
+from [Felucca-Engines](https://github.com/hugelton/Felucca-Engines) under the MIT
+licence, so an ordinary clone contains everything needed from that repository:
 
 ```
-git clone --recurse-submodules https://github.com/easyhard007/Felucca-RDX.git
+git clone https://github.com/easyhard007/Felucca-RDX.git
 ```
 
-In a clone made without it, run `git submodule update --init` once. GitHub's "Download ZIP" and the source archives
-it adds to a release leave `firmware/engines/` empty; each release also has `felucca-X.Y.Z-source.tar.gz`, the whole
-source with the submodule's files in it. The build stops with "firmware/engines is empty" when they are missing.
+GitHub's “Download ZIP” archives therefore contain the engine sources as well.
 
 ## Prerequisites (macOS)
 

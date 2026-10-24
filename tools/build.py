@@ -402,8 +402,7 @@ def main():
         name = f"felucca-{a.release}.fwsc"
         clean_name = f"felucca-{a.release}-clean.fwsc"
     if not (FW / "engines" / "src" / "felucca_engine.h").exists():
-        raise SystemExit("firmware/engines is empty: the Felucca-Engines submodule "
-                         "(git submodule update --init, or clone with --recurse-submodules)")
+        raise SystemExit("firmware/engines is missing: restore the vendored Felucca-Engines sources")
     fm1pkg_make.SDK = a.sdk
     for rel, sha in SDK_SHA256.items():          # fail early without the SDK
         if hashlib.sha256(fm1pkg_make.sdk_file(rel)).hexdigest() != sha:

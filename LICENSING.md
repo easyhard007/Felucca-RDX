@@ -22,17 +22,15 @@ Three source files are ports and keep the licence of their originals:
 a whole.
 
 Five engines and the code they share are under the MIT licence, not the GPL. They are
-Hügelton Instruments' own work and live in their own repository, Felucca-Engines
-(<https://github.com/hugelton/Felucca-Engines>), included here as the git submodule
+Hügelton Instruments' own work from the Felucca-Engines repository
+(<https://github.com/hugelton/Felucca-Engines>), vendored here in
 `firmware/engines/`: the ANALOG, LOFI, TRIO, WHEEL and NOISE engines (`eng_analog.c`,
 `eng_lofi.c`, `eng_trio.c`, `eng_wheel.c`, `eng_noise.c`), the engine interface
 (`felucca_engine.h`), the shared DSP helpers (`dsp.c`) and the generator of their tables
 (`SPDX-License-Identifier: MIT`, `firmware/engines/LICENSE`, also
 `LICENSES/MIT-Felucca-Engines.txt`). The firmware built with them is GPL-3.0-only as a whole.
-Felucca's complete source includes that submodule: clone with `--recurse-submodules`, and
-give it along with the rest when you share the source. Each release also offers
-`felucca-X.Y.Z-source.tar.gz`, the whole source with the submodule's files in it (GitHub's
-own source archives leave the submodule empty).
+An ordinary clone and GitHub's source archives include these files directly; give them
+along with the rest when you share the source.
 
 You may use, study, change and share Felucca under the GPL. If you distribute Felucca, or
 firmware derived from it, you must also give your recipients its complete corresponding
@@ -103,8 +101,8 @@ never uploaded or redistributed.
 
 ## Contributions
 
-Contributions are welcome under GPL-3.0-only. Changes to the five engines and the code they
-share (`firmware/engines/`) go to the Felucca-Engines repository, under the MIT licence.
+Contributions are welcome under GPL-3.0-only. The five engines and the code they share
+(`firmware/engines/`) derive from the Felucca-Engines repository under the MIT licence.
 
 ## Trademarks
 

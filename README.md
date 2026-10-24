@@ -51,7 +51,7 @@ See [GUIDE.md](GUIDE.md) for the build, simulator and installation workflow.
 From PowerShell:
 
 ```powershell
-git clone --recurse-submodules https://github.com/easyhard007/Felucca-RDX.git
+git clone https://github.com/easyhard007/Felucca-RDX.git
 cd Felucca-RDX
 .\build-rdx.ps1
 ```

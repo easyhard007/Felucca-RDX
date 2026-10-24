@@ -52,7 +52,7 @@
 #define UP_SLOTS 32u             /* user presets (upreset.c) */
 
 /* ------------------------------------------------------- parameters --- */
-/* the engine interface (Felucca-Engines, MIT: engines/, a git submodule): param_desc_t and F_*, voice_t,
+/* the engine interface (Felucca-Engines, MIT: vendored in engines/): param_desc_t and F_*, voice_t,
  * vmod_t, preset_t with FX() / PAT(), engine_t, NELEM */
 #include "../engines/src/felucca_engine.h"
 
