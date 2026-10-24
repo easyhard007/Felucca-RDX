@@ -40,13 +40,13 @@ const E = vm.runInNewContext(proto + `
 ;({ frame, unframe, parse, req, Link, parseWav, resample, normalize, takeSample, autoTrim, zoomView, rootFromName, buildSlot, makeMockDevice, CMD, SMP,
    UP, bank, capturePatch, auditionPatch, startWatch, libraryFile, readLibraryFile, paramKeys, patternFromSteps, stepsFromPattern, upName,
    mixer, parseNotes, parseHits, hitsText, gridFromSteps, LANE_NOTE, LANE_OF, readDevicePreferences, devicePresetRows, engineOrder, ENGINE_ORDER, aliasOf, fmtValue, FM6, enumShown, F,
-   FM4, fromDigital, fromPerc, DRUM_KIT_E,
+   FM4, fromDigital, fromPerc, DRUM_KIT_E, RDX, parseRdxSyx, readZipEntries,
    MENU: typeof MENU === "undefined" ? null : MENU, MENU_TABS: typeof MENU_TABS === "undefined" ? null : MENU_TABS,
    readDeviceMenu: typeof readDeviceMenu === "undefined" ? null : readDeviceMenu,
    parseMotionAll: typeof parseMotionAll === "undefined" ? null : parseMotionAll,
    fm6Bank: typeof fm6Bank === "undefined" ? null : fm6Bank, crc32: typeof crc32 === "undefined" ? null : crc32,
    midiLearn: typeof midiLearn === "undefined" ? null : midiLearn })`,
-{ setTimeout, clearTimeout, setInterval, clearInterval, console });
+{ setTimeout, clearTimeout, setInterval, clearInterval, console, Uint8Array, DataView, TextDecoder, Blob, Response, DecompressionStream });
 
 async function editorMock() {
   const m = E.makeMockDevice();
@@ -1517,8 +1517,10 @@ function editorTabs() {
   const tabs = [...html.matchAll(/<button role="tab" data-tab="(\w+)"/g)].map((x) => x[1]);
   const panels = [...html.matchAll(/<section class="panel" id="p-(\w+)" data-tab="(\w+)"/g)].map((x) => [x[1], x[2]]);
   const TABS = JSON.parse((/const TABS = (\[[^\]]*\]);/.exec(html) || [])[1] || "[]");
-  ok(tabs.length === 8 && js(tabs) === js(TABS) && js(panels.map((x) => x[1])) === js(TABS) && panels.every(([a, b]) => a === b),
-    `editor: ${tabs.length} tabs, one panel each (${tabs.join(" ")})`);
+  const hidden = ["sound", "fm6", "tracks", "samples", "projects"];
+  ok(tabs.length === 3 && js(tabs) === js(TABS) && js(TABS) === js(["sequencer", "library", "settings"]) &&
+      panels.every(([a, b]) => a === b) && hidden.every((x) => panels.some(([a]) => a === x)),
+    `editor: ${tabs.length} visible tabs (${tabs.join(" ")}); editing panels retained but hidden`);
   ok(/localStorage\.setItem\(TAB_KEY/.test(html) && /try \{ localStorage/.test(html) && /history\.replaceState\([^)]*"#" \+ name\)/.test(html)
     && /addEventListener\("hashchange"/.test(html), "editor: last tab in localStorage (try/catch) and in the URL hash");
   /* every string key in both languages */
@@ -1537,6 +1539,50 @@ function editorTabs() {
   ok(!err, "editor: page script compiles" + (err ? ` (${err})` : ""));
   ok(!/#[0-9a-f]{3,6}\b/i.test(html.slice(html.indexOf("[hidden]") - 6000, html.indexOf("[hidden]")).replace(/:root[^}]*\}/g, "")),
     "editor: no colours beyond the black / white tokens in the new styles");
+}
+
+async function editorRdxImport() {
+  const common = new Array(38).fill(0), ops = Array.from({ length: 4 }, () => new Array(28).fill(0));
+  "Wurlitzer_".split("").forEach((c, i) => { common[i] = c.charCodeAt(0); });
+  const bulk = (ah, am, al, data) => {
+    const count = data.length + 4, body = [5, ah, am, al, ...data];
+    return [0xF0, 0x43, 0, 0x7F, 0x1C, count >> 7, count & 127, ...body,
+      (-body.reduce((s, x) => s + x, 0)) & 127, 0xF7];
+  };
+  const syx = Uint8Array.from([
+    ...bulk(0x0E, 0x0F, 0, []), ...bulk(0x30, 0, 0, common),
+    ...ops.flatMap((x, i) => bulk(0x31, i, 0, x)), ...bulk(0x0F, 0x0F, 0, []),
+  ]);
+  const p = E.parseRdxSyx(syx, "DX-00037982-Wurlitzer_.syx");
+  ok(p.number === "00037982" && p.name === "Wurlitzer_" && p.rdx.length === 150 && p.engineName === "RDX",
+    "RDX library: Yamaha bulk -> filename number, name and 150-byte patch");
+  const bad = syx.slice(); bad[20] ^= 1;
+  let rejected = false; try { E.parseRdxSyx(bad, "bad.syx"); } catch { rejected = true; }
+  ok(rejected, "RDX library: damaged Yamaha checksum is rejected");
+
+  const name = new TextEncoder().encode("folder/DX-00037982-Wurlitzer_.syx"), crc = E.crc32(syx);
+  const local = Buffer.alloc(30 + name.length + syx.length), central = Buffer.alloc(46 + name.length), end = Buffer.alloc(22);
+  local.writeUInt32LE(0x04034B50, 0); local.writeUInt16LE(20, 4); local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(syx.length, 18); local.writeUInt32LE(syx.length, 22); local.writeUInt16LE(name.length, 26);
+  Buffer.from(name).copy(local, 30); Buffer.from(syx).copy(local, 30 + name.length);
+  central.writeUInt32LE(0x02014B50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(crc, 16); central.writeUInt32LE(syx.length, 20); central.writeUInt32LE(syx.length, 24);
+  central.writeUInt16LE(name.length, 28); Buffer.from(name).copy(central, 46);
+  end.writeUInt32LE(0x06054B50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12); end.writeUInt32LE(local.length, 16);
+  const entries = await E.readZipEntries(Buffer.concat([local, central, end]));
+  ok(entries.length === 1 && entries[0].name.endsWith("Wurlitzer_.syx") && eq(entries[0].bytes, syx),
+    "RDX library: ZIP lists and verifies contained .syx files");
+
+  /* Regression: the first RDX importer mistook more than 2048 central-directory
+     records for a damaged archive. Real libraries can contain many thousands. */
+  const manyCount = 2050, manyCentral = Buffer.concat(Array.from({ length: manyCount }, () => central));
+  const manyEnd = Buffer.from(end);
+  manyEnd.writeUInt16LE(manyCount, 8); manyEnd.writeUInt16LE(manyCount, 10);
+  manyEnd.writeUInt32LE(manyCentral.length, 12);
+  const many = await E.readZipEntries(Buffer.concat([local, manyCentral, manyEnd]));
+  ok(many.length === manyCount && eq(many.at(-1).bytes, syx),
+    "RDX library: ZIP may contain more than 2048 .syx files");
 }
 
 /* ------------------------------------------------- editor icons (Fukiai) --- */
@@ -1743,6 +1789,7 @@ await editorFm6Bank();
 await editorMidiLearn();
 fm6TabNoBank();
 await editorFm4();
+await editorRdxImport();
 editorTabs();
 editorIcons();
 samplesMatch();

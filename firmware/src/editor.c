@@ -354,6 +354,9 @@ static int ed_flash_stop(void)
 #include "editor_menu.c"
 #include "editor_learn.c"                    /* 1.5: MIDI LEARN's map (cmds 78, 79) */
 #include "editor_palette.c"                  /* 1.6: CUSTOM, the user's palette (cmds 80, 81) */
+#if FELUCCA_RDX
+#include "editor_rdx.c"                      /* raw 150-byte RDX voices (cmds 82, 83) */
+#endif
 
 /* MOTION's reply: the records of track k as (step, id, v14), a lock's id without its MOTION_LOCK bit (a 7-bit SysEx
  * byte); kinds (1.1: the ops 5..7): then one byte per record, in the same order, 0 automation, 1 lock. The query and
@@ -441,10 +444,15 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
     ed_begin(cmd);
     if (ed_ui_handle(cmd, a, na)) { ed_send(); return; }
     if (ed_backup_handle(cmd, a, na)) { ed_send(); return; }
+#if !FELUCCA_RDX
     if (ed_fm6_handle(cmd, a, na)) { ed_send(); return; }
+#endif
     if (ed_menu_handle(cmd, a, na)) { ed_send(); return; }
     if (ed_learn_handle(cmd, a, na)) { ed_send(); return; }
     if (ed_palette_handle(cmd, a, na)) { ed_send(); return; }
+#if FELUCCA_RDX
+    if (ed_rdx_handle(cmd, a, na)) { ed_send(); return; }
+#endif
     switch (cmd) {
     case ED_MOTION: {
         track_t *t = &trk[a[0]]; uint32_t rc = 0;
@@ -492,6 +500,9 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_b(0x43); ed_b(1); ed_b(ML_N);   /* 1.5: MIDI LEARN's map (cmds 78, 79; editor_learn.c) */
         ed_b(0x4B); ed_b(1); ed_b(NCOND);   /* 1.5.5: a step's condition (1..11) after its nudge */
         ed_b(0x45); ed_b(1); ed_b(ED_PAL_N);   /* 1.6: CUSTOM, the user's palette: 5 colours (cmds 80, 81; editor_palette.c) */
+#if FELUCCA_RDX
+        ed_b(0x44); ed_b(1); ed_b(1);          /* RDX librarian: raw patch GET / PUT, cmds 82 / 83 */
+#endif
         break;
     case ED_GET:
     case ED_SET:
@@ -606,13 +617,22 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         if (na < 1u || a[0] >= SMP_USER_SLOTS || !flash_ok)
             return;
         ed_b(a[0]);
+#if FELUCCA_RDX
+        ed_b(1u);                                          /* sectors 0/1 hold RDX user patches */
+#else
         ed_b(ed_flash_stop() || ed_smp_erase(a[0], cmd == ED_SMP_ERASE) ? 1u : 0u);
+#endif
         break;
     case ED_SMP_WRITE: {                                   /* slot, off (3 x 7 bit), pack7 data -> slot, off, rc */
         uint32_t off, len, rc = 0, took;
         if (na < 5u || a[0] >= SMP_USER_SLOTS || !flash_ok)
             return;
         off = (uint32_t)a[1] | (uint32_t)a[2] << 7 | (uint32_t)a[3] << 14;
+#if FELUCCA_RDX
+        (void)len; (void)took; (void)rc;
+        ed_b(a[0]); ed_b(off); ed_b(off >> 7); ed_b(off >> 14); ed_b(1u);
+        break;
+#else
         len = ed_unpack7(a + 4, na - 4u, ed_smp_buf, 256u);
         if (off < SMP_USER_DATA || (off & 0xFFu) || !len || off + len > SMP_USER_SIZE)
             rc = 1;
@@ -634,14 +654,22 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_b(off >> 14);
         ed_b(rc);
         break;
+#endif
     }
     case ED_SMP_END:                                       /* slot, pack7 header -> slot, rc */
         if (na < 2u || a[0] >= SMP_USER_SLOTS || !flash_ok)
             return;
         ed_b(a[0]);
+#if FELUCCA_RDX
+        ed_b(1u);
+#else
         ed_b((uint32_t)ed_smp_end(a[0], a + 1, na - 1u));
+#endif
         break;
     case ED_SMP_INFO:                                      /* -> per slot: zones (0 = empty), name, data KiB */
+#if FELUCCA_RDX
+        ed_b(0u); ed_b(0u);
+#else
         ed_b(SMP_USER_SLOTS);
         ed_b(SMP_USER_SIZE / 1024u);
         for (i = 0; i < SMP_USER_SLOTS; i++) {
@@ -654,6 +682,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             ed_str(nm, 8);
             ed_b(usr_nz[i] ? (h->data_len + 1023u) / 1024u : 0u);
         }
+#endif
         break;
     case ED_UP_LIST: {                                     /* start, count -> start, count, total, per slot: used, engine, name;
                                                             * (1.2) then per slot its category (category.c CAT_*, 0 unused):

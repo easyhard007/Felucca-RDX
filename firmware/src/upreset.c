@@ -286,6 +286,9 @@ static void up_values(const up_rec_t *r, int16_t *v)   /* mapped and clamped for
 
 #include "up_fm6.c"                            /* the FM6 user presets' patches: the same kind of store */
 #include "fm6_vbank.c"                         /* FM6's voice bank (SLOT B1..B32, 1.4.1) */
+#if FELUCCA_RDX
+#include "up_rdx.c"                            /* complete custom RDX voices for User slots */
+#endif
 
 static void up_boot(void)                      /* persist_boot: the banks from flash */
 {
@@ -294,8 +297,12 @@ static void up_boot(void)                      /* persist_boot: the banks from f
     for (b = 0; b < UP_SLOTS / UP_PER_BANK; b++)
         up_bank_check(b, flash_ok ? st_load(OBJ_UPRESET0 + b, &up_bank[b], sizeof up_bank[b]) : -1);
 #endif
+#if FELUCCA_RDX
+    upr_boot();
+#else
     upf_boot();                                  /* (after the banks: it may move the retired FM6 bank's patches) */
     fvb_boot();                                  /* FM6's voice bank: a staged one finished, its voices */
+#endif
 #ifdef FELUCCA_FAVORITES
     for (uint32_t k = 0; k < UP_SLOTS; k++)
         if (!up_used(k)) favorite_set(NENGINES, k, 0);
@@ -425,7 +432,11 @@ static int up_store_cat(uint32_t k, const char *name, uint32_t cat)
     {
         int rc = up_put(k, &r);                         /* the record first, then its FM6 patch (up_fm6.c) */
         if ((rc == 0 || rc == 3) && r.engine == ENGI_FM6) {
+#if FELUCCA_RDX
+            int u = upr_store(k, (uint32_t)(TSEL - trk));
+#else
             int u = upf_store(k, (uint32_t)(TSEL - trk));
+#endif
             if (u == 2)
                 rc = 2;
         }
@@ -481,7 +492,7 @@ static int up_load(uint32_t k)
         t->preset = 0;
         fm1_irq_on();
 #if FELUCCA_RDX
-        rdx_track_restored(t);                          /* RDX: P_E7 owns its patch and MONO / LEGATO mode */
+        upr_track_load(t, k);                           /* complete imported RDX patch, or old slot's factory fallback */
 #else
         upf_track_load(t, k);                           /* FM6: the preset's own patch (up_fm6.c) */
 #endif

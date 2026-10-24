@@ -170,13 +170,8 @@
     </div>
     <div id="status"></div>
     <nav class="tabs" id="tabs" role="tablist">
-      <button role="tab" data-tab="sound" data-t="sound" data-ic="symbol_audio"></button>
-      <button role="tab" data-tab="fm6" data-t="tabFm6" data-ic="ui_knob"></button>
       <button role="tab" data-tab="sequencer" data-t="tabSeq" data-ic="symbol_grid"></button>
-      <button role="tab" data-tab="tracks" data-t="tabTracks" data-ic="ui_slider_vertical"></button>
       <button role="tab" data-tab="library" data-t="library" data-ic="symbol_books"></button>
-      <button role="tab" data-tab="samples" data-t="samples" data-ic="symbol_waves"></button>
-      <button role="tab" data-tab="projects" data-t="projects" data-ic="symbol_folder"></button>
       <button role="tab" data-tab="settings" data-t="tabSettings" data-ic="symbol_cog"></button>
     </nav>
     <div class="trackbar" id="trackbar" hidden><span class="dim" data-t="track"></span><span class="seg" id="trackbtns" role="group"></span></div>
@@ -267,6 +262,11 @@
           <select id="libsort"></select>
         </div>
         <div class="list" id="liblist"></div>
+        <p class="bar" id="libpager" style="margin-top:6px" hidden>
+          <button id="libprev" title="Previous page" aria-label="Previous page">&#x2039;</button>
+          <span class="dim" id="libpage"></span>
+          <button id="libnext" title="Next page" aria-label="Next page">&#x203a;</button>
+        </p>
         <p class="bar" style="margin-top:6px">
           <button id="libaud" data-t="audition" data-ic="symbol_audio"></button>
           <button id="libput" data-t="toSlot" data-ic="symbol_upload"></button>
@@ -280,7 +280,7 @@
           <button id="libsave" data-t="saveToLib" data-ic="port_disk"></button>
           <button id="libimport" data-t="import" data-ic="symbol_upload"></button>
           <button id="libexport" data-t="exportLib" data-ic="symbol_download"></button>
-          <input type="file" id="libfile" accept=".json,application/json" multiple hidden>
+          <input type="file" id="libfile" accept=".zip,.syx,.json,application/zip,application/json" multiple hidden>
           <span class="dim" id="libcount"></span>
         </p>
       </div>
@@ -361,7 +361,8 @@ const CMD = { INFO: 1, GET: 2, SET: 3, DUMP: 4, DESC: 5, STEP_GET: 6, STEP_SET: 
   TRACK_PARAM: 31, TRACK_CHANGED: 32, SONG: 33,
   UI_STATE: 34, UI_SET: 35, UI_PALETTES: 36, FAV_GET: 37, FAV_SET: 38,
   MOTION: 64, BACKUP_LIST: 65, BACKUP_GET: 66, BACKUP_PUT: 67,
-  FM6_GET: 68, FM6_PUT: 69, FM6_LIST: 70, FM6_ERASE: 71 };
+  FM6_GET: 68, FM6_PUT: 69, FM6_LIST: 70, FM6_ERASE: 71,
+  RDX_GET: 82, RDX_PUT: 83 };
 /* frames the device sends on its own (while WATCH is on); never replies */
 const PUSH = new Set([CMD.CHANGED, CMD.RELOAD, CMD.STEP_CHANGED, CMD.TRACK_CHANGED]);
 /* user preset bank: name 1..12 printable ASCII, a 16-step pattern of (note, flags 1 acc 2 slide 4 tie) */
@@ -444,6 +445,7 @@ const parse = {
       if (trailer[8] === 0x42 && trailer[9] === 1) o.backupCaps = trailer[10] & 3;
     }
     o.fm6 = null;                                 /* FM6 patches (cmds 68..71): the factory and bank slot counts */
+    o.rdx = false;                                /* Felucca-RDX raw 150-byte voice transfer (cmds 82, 83) */
     o.syncCaps = 0;                               /* live sync: bit 0 WATCH while on keeps pending pushes, bit 1 no RELOAD */
     o.ratchet = 0;                                /* a step's ratchet (STEP_SET's byte after the chance), 0 = none */
     for (const p of [8, 11]) if (o.motionMax && trailer[p] === 0x46 && trailer[p + 1] === 1) {   /* for the editor's */
@@ -455,6 +457,8 @@ const parse = {
       if (trailer[r] === 0x4E && trailer[r + 1] === 1) r += 3;                            /* and the MENU settings (1.0.4) */
       if (o.syncCaps && trailer[r] === 0x52 && trailer[r + 1] === 1) o.ratchet = trailer[r + 2];   /* RATCH: max hits */
     }
+    for (let i = 0; i + 2 < trailer.length; i++)
+      if (trailer[i] === 0x44 && trailer[i + 1] === 1) o.rdx = !!trailer[i + 2];
     return o;
   },
   [CMD.UI_STATE](a) {
@@ -587,6 +591,8 @@ const parse = {
     return o;
   },
   [CMD.FM6_ERASE](a) { return { index: a[0], rc: a[1] }; },
+  [CMD.RDX_GET](a) { return { target: a[0], index: a[1], rc: a[2], patch: a[2] ? null : a.slice(3, 153) }; },
+  [CMD.RDX_PUT](a) { return { target: a[0], index: a[1], rc: a[2] }; },
 };
 
 /* a name the device accepts: printable ASCII, 1..12 characters */
@@ -655,6 +661,8 @@ const req = {
   fm6Put: (target, i, packed) => [CMD.FM6_PUT, [target & 0x7F, i & 0x7F, ...packed.map((x) => x & 0x7F)]],
   fm6List: () => [CMD.FM6_LIST, []],
   fm6Erase: (i) => [CMD.FM6_ERASE, [i & 0x7F]],
+  rdxGet: (target, i) => [CMD.RDX_GET, [target & 0x7F, i & 0x7F]],
+  rdxPut: (target, i, patch) => [CMD.RDX_PUT, [target & 0x7F, i & 0x7F, ...patch.map((x) => x & 0x7F)]],
 };
 
 /* which reply belongs to which request (the device echoes these) */
@@ -671,7 +679,8 @@ function replyMatches(cmd, args, a) {
     case CMD.SMP_BEGIN: case CMD.SMP_END: case CMD.SMP_ERASE: return a[0] === args[0];
     case CMD.SMP_WRITE: return a[0] === args[0] && a[1] === args[1] && a[2] === args[2] && a[3] === args[3];
     case CMD.SONG: return a[0] === args[0];
-    case CMD.FM6_GET: case CMD.FM6_PUT: return a[0] === args[0] && a[1] === args[1];
+    case CMD.FM6_GET: case CMD.FM6_PUT: case CMD.RDX_GET: case CMD.RDX_PUT:
+      return a[0] === args[0] && a[1] === args[1];
     case CMD.FM6_ERASE: return a[0] === args[0];
     case CMD.PROJECT: return a[0] === args[0] && a[1] === args[1];
     case CMD.UP_LIST: case CMD.UP_GET: case CMD.UP_PUT: case CMD.UP_STORE: case CMD.UP_LOAD: case CMD.UP_ERASE:
@@ -1102,6 +1111,84 @@ const patternUsed = (pat) => !!pat && pat.some((x) => x && x[0]);
 /* a DRUM track's first 16 steps -> a grid, as the firmware's UP_STORE stores one (its notes on their lanes) */
 const gridFromSteps = (steps) => Array.from({ length: UP.PAT }, (_, i) => (steps[i] ? [stepLanes(steps[i]), stepAccents(steps[i])] : [0, 0]));
 
+/* Yamaha reface DX voice bulk: seven SysEx messages containing one 38-byte
+   common block and four 28-byte operator blocks. */
+const RDX = { SIZE: 150, ENGINE: 12, TARGET: { TRACK: 0, USER: 1 } };
+function rdxFileIdentity(filename, fallback) {
+  const base = String(filename || "").split(/[\\/]/).pop().replace(/\.syx$/i, "");
+  const m = /^DX-(\d+)-(.+)$/i.exec(base);
+  return { number: m ? m[1] : "", name: (m ? m[2] : fallback || base || "RDX VOICE").trim() };
+}
+function parseRdxSyx(input, filename = "") {
+  const a = input instanceof Uint8Array ? input : new Uint8Array(input), msgs = [], blocks = new Map();
+  for (let at = 0; at < a.length;) {
+    while (at < a.length && a[at] !== 0xF0) at++;
+    if (at >= a.length) break;
+    let end = at + 1; while (end < a.length && a[end] !== 0xF7) end++;
+    if (end >= a.length) throw new Error("unterminated SysEx message");
+    msgs.push(a.slice(at, end + 1)); at = end + 1;
+  }
+  if (msgs.length !== 7) throw new Error(`expected 7 SysEx messages, found ${msgs.length}`);
+  for (const m of msgs) {
+    if (m.length < 13 || m[0] !== 0xF0 || m[1] !== 0x43 || m[3] !== 0x7F || m[4] !== 0x1C || m[7] !== 0x05)
+      throw new Error("unsupported Yamaha reface DX bulk header");
+    const count = m[5] << 7 | m[6];
+    if (count < 4 || m.length !== count + 9) throw new Error("invalid bulk byte count");
+    if (m.slice(7, -1).reduce((s, x) => s + x, 0) & 0x7F) throw new Error("invalid Yamaha checksum");
+    blocks.set(`${m[8]},${m[9]},${m[10]}`, Array.from(m.slice(11, -2)));
+  }
+  if ((blocks.get("14,15,0") || [1]).length || (blocks.get("15,15,0") || [1]).length)
+    throw new Error("missing reface DX bulk start/end blocks");
+  const common = blocks.get("48,0,0"), ops = [0, 1, 2, 3].map((i) => blocks.get(`49,${i},0`));
+  if (!common || common.length !== 38 || ops.some((x) => !x || x.length !== 28))
+    throw new Error("incomplete reface DX voice data");
+  const patch = [...common, ...ops.flat()];
+  if (patch.length !== RDX.SIZE || patch.some((x) => x > 127)) throw new Error("invalid RDX patch data");
+  const internal = String.fromCharCode(...patch.slice(0, 10)).replace(/[\0 ]+$/g, "");
+  if (!internal) throw new Error("empty voice name");
+  const id = rdxFileIdentity(filename, internal);
+  return cleanPatch({ name: id.name || internal, number: id.number, engine: RDX.ENGINE, engineName: "RDX", p: [],
+    rdx: patch, tags: ["syx"] });
+}
+
+/* Small ZIP reader for browser imports. It supports the two methods produced
+   by ordinary ZIP tools: stored and raw DEFLATE, and verifies sizes + CRC. */
+async function readZipEntries(input) {
+  const u = input instanceof Uint8Array ? input : new Uint8Array(input), dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
+  let eocd = -1;
+  for (let i = u.length - 22, stop = Math.max(0, u.length - 65557); i >= stop; i--)
+    if (dv.getUint32(i, true) === 0x06054B50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("invalid ZIP: end record not found");
+  const disk = dv.getUint16(eocd + 4, true), cdDisk = dv.getUint16(eocd + 6, true);
+  const diskCount = dv.getUint16(eocd + 8, true), count = dv.getUint16(eocd + 10, true);
+  const cdSize = dv.getUint32(eocd + 12, true), cdOff = dv.getUint32(eocd + 16, true);
+  if (disk || cdDisk || diskCount !== count || cdOff + cdSize > eocd) throw new Error("invalid ZIP directory");
+  if (count === 0xffff || cdSize === 0xffffffff || cdOff === 0xffffffff) throw new Error("ZIP64 archives are not supported");
+  const out = []; let p = cdOff, total = 0;
+  for (let n = 0; n < count; n++) {
+    if (p + 46 > u.length || dv.getUint32(p, true) !== 0x02014B50) throw new Error("invalid ZIP entry");
+    const flags = dv.getUint16(p + 8, true), method = dv.getUint16(p + 10, true), crc = dv.getUint32(p + 16, true);
+    const csize = dv.getUint32(p + 20, true), usize = dv.getUint32(p + 24, true), nl = dv.getUint16(p + 28, true);
+    const xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), local = dv.getUint32(p + 42, true);
+    if (flags & 1 || p + 46 + nl + xl + cl > u.length || local + 30 > u.length || dv.getUint32(local, true) !== 0x04034B50)
+      throw new Error("unsupported or damaged ZIP entry");
+    const name = new TextDecoder(flags & 0x800 ? "utf-8" : "utf-8").decode(u.slice(p + 46, p + 46 + nl));
+    const lnl = dv.getUint16(local + 26, true), lxl = dv.getUint16(local + 28, true), start = local + 30 + lnl + lxl;
+    if (start + csize > u.length || usize > 65536 || (total += usize) > 16 * 1024 * 1024) throw new Error("ZIP entry is too large");
+    let bytes;
+    if (method === 0) bytes = u.slice(start, start + csize);
+    else if (method === 8) {
+      if (typeof DecompressionStream === "undefined") throw new Error("this browser cannot decompress ZIP files");
+      const stream = new Blob([u.slice(start, start + csize)]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    } else throw new Error(`unsupported ZIP compression method ${method}`);
+    if (bytes.length !== usize || crc32(bytes) !== crc) throw new Error(`damaged ZIP entry: ${name}`);
+    if (!name.endsWith("/")) out.push({ name, bytes });
+    p += 46 + nl + xl + cl;
+  }
+  return out;
+}
+
 function cleanPatch(pt) {
   const now = new Date().toISOString();
   const pat = Array.isArray(pt.pattern) && pt.pattern.length
@@ -1112,6 +1199,7 @@ function cleanPatch(pt) {
     : null;
   const o = {
     name: String(pt.name ?? "PATCH").slice(0, 32) || "PATCH",
+    number: String(pt.number ?? "").replace(/[^0-9]/g, "").slice(0, 16),
     engine: pt.engine | 0, engineName: String(pt.engineName ?? ""),
     p: Array.from(pt.p || pt.params || [], (v) => (Number.isFinite(v) ? Math.round(v) : null)),
     pattern: patternUsed(grid) ? null : patternUsed(pat) ? pat : null,
@@ -1122,6 +1210,7 @@ function cleanPatch(pt) {
   if (Number.isInteger(pt.slot)) o.slot = pt.slot;
   if (Array.isArray(pt.fm6) && pt.fm6.length === FM6.PACKED) o.fm6 = pt.fm6.map((x) => (x | 0) & 127);   /* (a converted */
   if (Array.isArray(pt.fm4)) o.fm4 = pt.fm4.map((v) => (Number.isFinite(v) ? Math.round(v) : null));    /* DIGITAL sound) */
+  if (Array.isArray(pt.rdx) && pt.rdx.length === RDX.SIZE) o.rdx = pt.rdx.map((x) => (x | 0) & 127);
   return o;
 }
 
@@ -1133,11 +1222,12 @@ function libraryFile(kind, patches, ctx) {
     exported: new Date().toISOString(),
     patches: patches.map((x) => {
       const c = cleanPatch(x);
-      const o = { name: c.name, engine: c.engine, engineName: c.engineName || (ctx.engines || [])[c.engine] || "",
+      const o = { name: c.name, number: c.number, engine: c.engine, engineName: c.engineName || (ctx.engines || [])[c.engine] || "",
         params: c.p, pattern: c.pattern, tags: c.tags, created: c.created, modified: c.modified };
       if (c.grid) o.grid = c.grid;
       if (c.fm6) { o.fm6 = c.fm6; if (c.fm4) o.fm4 = c.fm4; }   /* an FM6 sound's own patch (a DIGITAL sound converted: and
                                                          the DIGITAL values) */
+      if (c.rdx) o.rdx = c.rdx;
       if (Number.isInteger(x.slot)) o.slot = x.slot;
       return o;
     }),
@@ -1178,8 +1268,14 @@ function readLibraryFile(obj, ctx) {
   const out = [];
   let skipped = 0;
   for (const x of obj.patches) {
-    if (!x || !Array.isArray(x.params)) { skipped++; continue; }
+    if (!x || (!Array.isArray(x.params) && !(Array.isArray(x.rdx) && x.rdx.length === RDX.SIZE))) { skipped++; continue; }
     const nm = x.engineName || (obj.engines || [])[x.engine | 0];
+    if (Array.isArray(x.rdx) && x.rdx.length === RDX.SIZE) {
+      const e = ctx.engines && ctx.engines.length ? ctx.engines.lastIndexOf("RDX") : RDX.ENGINE;
+      if (ctx.engines && e < 0) { skipped++; continue; }
+      out.push(cleanPatch({ ...x, engine: e < 0 ? RDX.ENGINE : e, engineName: "RDX", p: x.params || [], rdx: x.rdx }));
+      continue;
+    }
     const digital = nm === "DIGITAL" && noFm4;
     const e = digital ? 1 : engIndex(x.engineName, x.engine | 0, obj.engines);
     if (e < 0) { skipped++; continue; }
@@ -1210,6 +1306,10 @@ const bank = {
   /* an FM6 sound's own patch comes with it (fm6: packed) where the firmware keeps one (INFO fm6.caps bit 1) */
   async get(rq, info, slot) {
     const u = parse[CMD.UP_GET](await rq(req.upGet(slot)), info);
+    if (u.used && info.rdx && info.engines[u.engine] === "RDX") {
+      const g = parse[CMD.RDX_GET](await rq(req.rdxGet(RDX.TARGET.USER, slot)));
+      if (!g.rc) u.rdx = g.patch;
+    }
     if (u.used && presetPatches(info) && info.engines[u.engine] === "FM6") {
       const g = parse[CMD.FM6_GET](await rq(req.fm6Get(FM6.TARGET.USER, slot)));
       if (!g.rc) u.fm6 = g.packed;
@@ -1234,13 +1334,19 @@ async function capturePatch(rq, info, name) {
   for (let i = 0; i < UP.PAT && i < info.nstep; i++) steps.push(parse[CMD.STEP_GET](await rq(req.stepGet(i))));
   const drum = info.engines[dump.engine] === "DRUM";   /* (a DRUM track that strikes a lane: its grid) */
   let fm6 = null;                                      /* an FM6 track: its own patch (the selected track's) */
+  let rdx = null;
   if (info.fm6 && info.engines[dump.engine] === "FM6") {
     const sel = info.ntrk ? parse[CMD.TRACK](await rq(req.track())).sel : 0;
     const g = parse[CMD.FM6_GET](await rq(req.fm6Get(FM6.TARGET.TRACK, sel)));
     if (!g.rc) fm6 = g.packed;
   }
+  if (info.rdx && info.engines[dump.engine] === "RDX") {
+    const sel = info.ntrk ? parse[CMD.TRACK](await rq(req.track())).sel : 0;
+    const g = parse[CMD.RDX_GET](await rq(req.rdxGet(RDX.TARGET.TRACK, sel)));
+    if (!g.rc) rdx = g.patch;
+  }
   return { patch: cleanPatch({ name, engine: dump.engine, engineName: info.engines[dump.engine], p: dump.p, pattern: patternFromSteps(steps),
-    grid: drum ? gridFromSteps(steps) : null, fm6 }), dump, steps };
+    grid: drum ? gridFromSteps(steps) : null, fm6, rdx }), dump, steps };
 }
 
 /* the track's own parameters, which no sound load changes (ui.c param_kept): LEVEL, the ARP and ARP 2 pages,
@@ -2574,9 +2680,9 @@ const TEXT = {
     layout: "（ファームウェアのパラメーター数が想定と違うため、簡易表示にしています）",
     ctlHelp: "スライダーはクリックしてからホイールか矢印キーで微調整（Shift で 10 ずつ）、ダブルクリックで初期値。",
     live: "● リアルタイム", polling: "○ ポーリング（古いファームウェア）",
-    library: "ライブラリ", libSearch: "名前・タグで検索", allEngines: "全エンジン", allTags: "全タグ",
+    library: "ライブラリ", libSearch: "番号・名前・タグで検索", allEngines: "全エンジン", allTags: "全タグ",
     sortModified: "更新順", sortCreated: "作成順", sortName: "名前順", sortEngine: "エンジン順",
-    name: "名前", tagsCol: "タグ", date: "更新",
+    number: "番号", name: "名前", tagsCol: "タグ", date: "更新",
     audition: "試聴", toSlot: "本体スロットへ", rename: "名前変更", tags: "タグ", duplicate: "複製", delete: "削除",
     exportPatch: "書き出し", saveToLib: "今の音色をライブラリへ", import: "読み込み", exportLib: "ライブラリを書き出し",
     factoryToLib: "ライブラリへコピー", libEmpty: "ライブラリは空です。「今の音色をライブラリへ」やファクトリープリセットのコピー、本体スロットからの取り込み、ファイルの読み込みで追加できます。",
@@ -2677,9 +2783,9 @@ const TEXT = {
     layout: "(The firmware has a different parameter count; showing a plain list.)",
     ctlHelp: "Sliders: click, then fine-tune with the wheel or arrow keys (Shift: steps of 10); double-click resets.",
     live: "● Live", polling: "○ Polling (older firmware)",
-    library: "Library", libSearch: "Search name or tag", allEngines: "All engines", allTags: "All tags",
+    library: "Library", libSearch: "Search number, name or tag", allEngines: "All engines", allTags: "All tags",
     sortModified: "Recently changed", sortCreated: "Recently added", sortName: "Name", sortEngine: "Engine",
-    name: "Name", tagsCol: "Tags", date: "Changed",
+    number: "Number", name: "Name", tagsCol: "Tags", date: "Changed",
     audition: "Audition", toSlot: "To device slot", rename: "Rename", tags: "Tags", duplicate: "Duplicate", delete: "Delete",
     exportPatch: "Export", saveToLib: "Save current sound", import: "Import", exportLib: "Export library",
     factoryToLib: "Copy to library", libEmpty: "The library is empty. Add sounds with \"Save current sound\", by copying a factory preset or a device slot, or by importing a file.",
@@ -2730,18 +2836,18 @@ $("lang").addEventListener("click", () => { lang = lang === "ja" ? "en" : "ja"; 
 
 /* ---------------------------------------------------------------- tabs --- */
 /* one panel at a time; the last one is remembered (localStorage) and in the URL hash (#sound ...) */
-const TABS = ["sound", "fm6", "sequencer", "tracks", "library", "samples", "projects", "settings"];
+const TABS = ["sequencer", "library", "settings"];
 const TAB_KEY = "felucca-editor-tab";
 const TRACK_TABS = new Set(["sound", "sequencer", "tracks"]);
 let tab = (() => {
   const h = location.hash.slice(1);
   if (TABS.includes(h)) return h;
   try { const v = localStorage.getItem(TAB_KEY); if (TABS.includes(v)) return v; } catch (e) { /* no storage */ }
-  return "sound";
+  return "library";
 })();
 const hasTracks = () => !!dev && !!dev.info && !!dev.info.ntrk;
 function showTab(name) {
-  if (!TABS.includes(name)) name = "sound";
+  if (!TABS.includes(name)) name = "library";
   const prev = tab;
   tab = name;
   try { localStorage.setItem(TAB_KEY, name); } catch (e) { /* no storage */ }
@@ -2755,7 +2861,7 @@ function renderPanels() {
   /* the Tracks tab only with a four-track firmware */
   const tracksOk = !dev || hasTracks() || !dev.info;
   const fm6Off = !!dev && !!dev.info && !dev.info.fm6;             /* the 6-OP FM tab: a hint without FM6 firmware */
-  const want = tab === "tracks" && dev && dev.info && !hasTracks() ? "sound" : tab;
+  const want = tab;
   for (const b of $("tabs").querySelectorAll("button[data-tab]")) {
     const on = b.dataset.tab === want;
     b.setAttribute("aria-selected", on ? "true" : "false");
@@ -4524,6 +4630,8 @@ let libMeta = { keys: null, engines: null, pe0: null };
 let libPersistent = false;
 let libSel = null, bankSel = null;
 let libBusy = false;           /* a library / bank operation is running */
+const LIB_PAGE_SIZE = 250;      /* thousands of imported voices must not become thousands of live DOM rows */
+let libPage = 0;
 const newId = () => (self.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const nowIso = () => new Date().toISOString();
 const slotName = (i) => "U" + String(i + 1).padStart(2, "0");
@@ -4565,6 +4673,11 @@ async function libAdopt(d) {
   const relayout = (libMeta.keys && !sameKeys(libMeta.keys, keys)) || (libMeta.engines && !sameKeys(libMeta.engines, engines));
   const noFm4 = (engines || [])[1] === "-";
   for (const p of lib) {
+    if (p.rdx) {
+      const e = engines.lastIndexOf("RDX");
+      if (e >= 0 && (p.engine !== e || p.engineName !== "RDX")) { p.engine = e; p.engineName = "RDX"; changed.push(p); }
+      continue;
+    }
     const name = p.engineName || (libMeta.engines || [])[p.engine];
     const digital = noFm4 && !p.fm6 && (name === "DIGITAL" || ((!name || name === "-") && p.engine === 1));
     const pe0 = () => (keys && p.p.length === keys.length ? d.info.pe0 : p.p.length - 8);   /* (E1..E8: the last 8) */
@@ -4584,7 +4697,8 @@ async function libAdopt(d) {
   try { await store.setMeta("layout", libMeta); } catch (e) { console.warn(e); }
   renderLib();
 }
-const engineOk = (p) => !!dev && p.engine < dev.info.nengines && (!p.engineName || dev.info.engines[p.engine] === p.engineName);
+const engineOk = (p) => !!dev && (p.rdx ? !!dev.info.rdx && dev.info.engines.includes("RDX") :
+  p.engine < dev.info.nengines && (!p.engineName || dev.info.engines[p.engine] === p.engineName));
 /* a full parameter set for UP_PUT: unknown values get the DESC default where it is known, else 0 */
 function fullParams(p) {
   const out = [];
@@ -4609,7 +4723,8 @@ function libView() {
     created: (a, b) => b.created.localeCompare(a.created),
     modified: (a, b) => b.modified.localeCompare(a.modified),
   }[$("libsort").value] || ((a, b) => b.modified.localeCompare(a.modified));
-  return lib.filter((p) => (!q || p.name.toLowerCase().includes(q) || p.tags.some((x) => x.toLowerCase().includes(q)))
+  return lib.filter((p) => (!q || p.name.toLowerCase().includes(q) || (p.number || "").toLowerCase().includes(q) ||
+      p.tags.some((x) => x.toLowerCase().includes(q)))
     && (!fe || p.engineName === fe) && (!ft || p.tags.includes(ft))).sort(by);
 }
 function fillSelect(sel, opts) {
@@ -4624,15 +4739,18 @@ function renderLib() {
   const tags = [...new Set(lib.flatMap((p) => p.tags))].sort();
   fillSelect($("libtag"), [["", t("allTags")], ...tags.map((x) => [x, x])]);
   fillSelect($("libsort"), [["modified", t("sortModified")], ["created", t("sortCreated")], ["name", t("sortName")], ["engine", t("sortEngine")]]);
-  const v = libView();
+  const allv = libView(), pages = Math.max(1, Math.ceil(allv.length / LIB_PAGE_SIZE));
+  libPage = Math.max(0, Math.min(libPage, pages - 1));
+  const v = allv.slice(libPage * LIB_PAGE_SIZE, (libPage + 1) * LIB_PAGE_SIZE);
   if (libSel && !lib.some((p) => p.id === libSel)) libSel = null;
   const box = $("liblist");
   if (!lib.length) box.replaceChildren(el("div", { class: "none", text: t("libEmpty") }));
   else {
-    const tb = el("table", {}, el("colgroup", {}, el("col"), el("col", { class: "e" }), el("col"), el("col", { class: "d" })),
-      el("tr", {}, el("th", { text: t("name") }), el("th", { text: t("engine") }), el("th", { text: t("tagsCol") }), el("th", { text: t("date") })));
+    const tb = el("table", {}, el("colgroup", {}, el("col", { class: "n" }), el("col"), el("col", { class: "e" }), el("col"), el("col", { class: "d" })),
+      el("tr", {}, el("th", { text: t("number") }), el("th", { text: t("name") }), el("th", { text: t("engine") }), el("th", { text: t("tagsCol") }), el("th", { text: t("date") })));
     for (const p of v) {
       const tr = el("tr", { "data-id": p.id, class: p.id === libSel ? "sel" : null, draggable: "true", title: p.name },
+        el("td", { text: p.number || "—" }),
         el("td", {}, p.pattern || p.grid ? icon("note_eight") : "", p.name),
         el("td", { text: p.engineName || String(p.engine) }),
         el("td", { text: p.tags.join(", ") }),
@@ -4644,15 +4762,25 @@ function renderLib() {
     }
     box.replaceChildren(tb, ...(v.length ? [] : [el("div", { class: "none", text: t("noMatch") })]));
   }
-  $("libcount").textContent = `${v.length} / ${lib.length}` + (libPersistent ? "" : " " + t("noLibDB"));
+  $("libcount").textContent = `${allv.length} / ${lib.length}` + (libPersistent ? "" : " " + t("noLibDB"));
+  $("libpager").hidden = allv.length <= LIB_PAGE_SIZE;
+  $("libpage").textContent = `${libPage + 1} / ${pages}`;
+  $("libprev").disabled = libPage === 0;
+  $("libnext").disabled = libPage + 1 >= pages;
   const sel = lib.find((p) => p.id === libSel);
   for (const id of ["libren", "libtags", "libdup", "libdel", "libexp1"]) $(id).disabled = !sel;
   $("libaud").disabled = !sel || !dev || libBusy;
-  $("libput").disabled = !sel || !dev || !dev.bank || bankSel == null || libBusy;
+  const autoSlot = dev && dev.bank && dev.bank.slots.find((x) => !x.used);
+  $("libput").disabled = !sel || !dev || !dev.bank || (bankSel == null && !autoSlot) || libBusy;
   $("libsave").disabled = !dev || libBusy;
   $("libexport").disabled = !lib.length;
 }
-["libq", "libeng", "libtag", "libsort"].forEach((id) => $(id).addEventListener(id === "libq" ? "input" : "change", renderLib));
+["libq", "libeng", "libtag", "libsort"].forEach((id) => $(id).addEventListener(id === "libq" ? "input" : "change", () => {
+  libPage = 0;
+  renderLib();
+}));
+$("libprev").addEventListener("click", () => { if (libPage) { libPage--; renderLib(); } });
+$("libnext").addEventListener("click", () => { libPage++; renderLib(); });
 
 function renderBank() {
   const pane = $("bankpane");
@@ -4724,7 +4852,8 @@ function libAudition(id) {
     if (!engineOk(p)) throw new Error(t("badEngine") + (p.engineName || p.engine));
     sayK("auditioning", p.name);
     selfLoad(true);
-    await auditionPatch(rqf, dev.info, p, { gEng: gEng(), track: dev.sel ?? 0,
+    if (p.rdx) checkRc(parse[CMD.RDX_PUT](await rqf(req.rdxPut(RDX.TARGET.TRACK, d.sel ?? 0, p.rdx))).rc);
+    else await auditionPatch(rqf, d.info, p, { gEng: gEng(), track: d.sel ?? 0,
       progress: (i, n) => { if (i % 8 === 0) sayK("auditioning", `${p.name} ${i}/${n}`); } });
     await afterSoundChange("ready", d);
     sayK("auditioned", p.name);
@@ -4759,11 +4888,24 @@ $("factlib").addEventListener("click", () => libOp(async (d, rqf) => {
 
 function libPut(id, slot) {
   const p = lib.find((x) => x.id === id);
-  if (!p || !dev || !dev.bank || slot == null || libBusy) return;
+  if (!p || !dev || !dev.bank || libBusy) return;
+  if (slot == null) slot = (dev.bank.slots.find((x) => !x.used) || {}).slot;
+  if (slot == null) return;
   const s = dev.bank.slots[slot];
   if (!engineOk(p)) { sayK("badEngine", p.engineName || p.engine); return; }
   if (s.used && !confirm(t("confirmOverwrite").replace("{n}", slotName(slot)).replace("{name}", s.name))) return;
   libOp(async (d, rqf) => {
+    if (p.rdx) {
+      selfLoad(true);
+      checkRc(parse[CMD.RDX_PUT](await rqf(req.rdxPut(RDX.TARGET.TRACK, d.sel ?? 0, p.rdx))).rc);
+      checkRc(await bank.store(rqf, slot, upName(p.name)));
+      await refreshSlot(slot, d);
+      checkRc(await bank.load(rqf, slot));
+      bankSel = slot;
+      await afterSoundChange("ready", d);
+      sayK("putDone", `${slotName(slot)} ${upName(p.name)}`);
+      return;
+    }
     const keep4 = p.fm4 && dev.info.engines[1] === "-" && p.fm4.length === dev.info.pcount;   /* a converted DIGITAL sound:
                                                      its DIGITAL values as engine 1 (the device converts them on load) */
     checkRc(await bank.put(rqf, slot, keep4 ? { ...p, engine: 1, name: upName(p.name), p: fullParams({ ...p, p: p.fm4 }) }
@@ -4823,6 +4965,20 @@ $("libfile").addEventListener("change", async () => {
   let n = 0, skipped = 0;
   for (const f of [...$("libfile").files]) {
     try {
+      if (/\.zip$/i.test(f.name)) {
+        const voices = [];
+        for (const e of await readZipEntries(await f.arrayBuffer())) {
+          if (!/\.syx$/i.test(e.name)) continue;
+          try { voices.push(parseRdxSyx(e.bytes, e.name)); } catch (err) { console.warn(e.name, err); skipped++; }
+        }
+        if (!voices.length && !skipped) throw new Error("ZIP contains no .syx files");
+        await libAdd(voices); n += voices.length;
+        continue;
+      }
+      if (/\.syx$/i.test(f.name)) {
+        await libAdd([parseRdxSyx(await f.arrayBuffer(), f.name)]); n++;
+        continue;
+      }
       const obj = JSON.parse(await f.text());
       const ctx = libCtx();
       const r = readLibraryFile(obj, ctx);

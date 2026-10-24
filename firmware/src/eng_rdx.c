@@ -398,6 +398,7 @@ static void rdx_sysex_patch_set(uint32_t tr, const rdx_patch_t *p)
     rdx_track_set(tr, p, 1);
     rdx_mode_apply(t, rdx_track_get(tr));
     rdx_fx_from_patch(t, rdx_track_get(tr));
+    t->p[P_E2] = 0;                              /* imported voices start at neutral gain */
     t->p[P_ED_FX] = RDX_GAIN_MARK;
 }
 
