@@ -4,6 +4,10 @@
 import fs from "fs";
 
 const bytes = fs.readFileSync(process.argv[2] || "build/emu/felucca.wasm");
+const versionHeader = fs.readFileSync("firmware/src/rdx_version.h", "utf8");
+const versionMatch = versionHeader.match(/^#define RDX_VERSION "([^"]+)"$/m);
+if (!versionMatch) throw new Error("Cannot read RDX_VERSION from firmware/src/rdx_version.h");
+const expectedFirmwareVersion = `RDX ${versionMatch[1]}`;
 let failed = false;
 const check = (name, ok) => {
   console.log(`rdx: ${name.padEnd(72)} ${ok ? "ok" : "FAIL"}`);
@@ -112,7 +116,8 @@ for (let i = 0; i < 24; i++) {
   if (!c) break;
   firmwareVersion += String.fromCharCode(c);
 }
-check("RDX firmware identifies itself as Felucca RDX 0.6.10", firmwareVersion === "RDX 0.6.10");
+check(`RDX firmware identifies itself as Felucca ${expectedFirmwareVersion}`,
+      firmwareVersion === expectedFirmwareVersion);
 check("HOME exposes MODE, PORTA, GAIN and Trans. in that order",
       d.ex.web_test_rdx_home_layout() === 1 &&
       cstr(d.ex.web_test_rdx_home_label_byte, 0) === "MODE" &&

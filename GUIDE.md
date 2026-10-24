@@ -7,12 +7,12 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 0.6.10
+- 当前版本：Felucca RDX 0.6.11
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
 
-版本号只在 `firmware\src\rdx_version.h` 中维护。每次向真机交付一份新固件时递增最后一段版本号，例如 `0.6.1 -> 0.6.2 -> ... -> 0.6.10`。启动画面、模拟器和安装器会读取同一版本。
+版本号只在 `firmware\src\rdx_version.h` 中维护。每次向真机交付一份新固件时递增最后一段版本号，例如 `0.6.1 -> 0.6.2 -> ... -> 0.6.11`。启动画面、模拟器和安装器会读取同一版本。
 
 ## 编译固件
 
@@ -58,7 +58,16 @@ cd Felucca-RDX
 
 ## 烧录到 FM-1
 
-先编译固件，再运行：
+公开网页可直接使用，无需在本机启动服务器：
+
+- 安装器：<https://easyhard007.github.io/Felucca-RDX/webapp/installer/>
+- 音色编辑器：<https://easyhard007.github.io/Felucca-RDX/webapp/editor/#library>
+
+`main` 分支每次推送后，GitHub Actions 会自动编译双核 RDX 固件，生成普通安装包和
+全新安装包，再将安装器与编辑器一起发布到 GitHub Pages。网页安装器和它提供的
+固件来自同一次构建。
+
+如需本地使用，先编译固件，再运行：
 
 ```powershell
 .\serve-rdx.ps1 installer
