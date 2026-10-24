@@ -127,7 +127,7 @@ static void rdx_ui_algorithm_turn(int32_t steps)
     int32_t a;
     if (!steps) return;
     rdx_patch_for_track(song.sel, &p);
-    a = clamp((int32_t)p.common.algorithm + (steps > 0 ? 1 : -1), 0, 11);
+    a = clamp((int32_t)p.common.algorithm + steps, 0, 11);
     if (a != p.common.algorithm) {
         p.common.algorithm = (uint8_t)a;
         rdx_ui_publish(&p);

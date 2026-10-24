@@ -1796,7 +1796,7 @@ static void ui_input(void)
     if ((s = glo ? sel : panel_enc(EN_SELECT)) != 0) {   /* SELECT knob = global tempo; */
 #if FELUCCA_RDX
         if (!glo && rdx_ui_row_ptr(cur_page()->graph)) {
-            rdx_ui_select(s > 0 ? 1 : -1);
+            rdx_ui_select(s);
         } else
 #endif
         if (!glo && rdx_touch_wah_active(TSEL)) {
