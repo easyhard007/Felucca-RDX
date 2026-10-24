@@ -1769,6 +1769,19 @@ async function updater() {
   ok(found && found.id.text === "FM-1_900",
     "fm1ota.js: pairs Windows MIDIIN/MIDIOUT names for the same Felucca device");
   found?.link.close();
+
+  /* Windows may leave MIDIPort.open() pending while another app owns FM-1.
+   * The installer must recover instead of leaving Install disabled forever. */
+  const never = () => new Promise(() => {}), stuckLog = [];
+  const stuck = new Updater({
+    inputs: new Map([["i", {id:"i", name:"Felucca", state:"connected", open:never}]]),
+    outputs: new Map([["o", {id:"o", name:"Felucca", state:"connected", open:never}]]),
+  }, (s) => stuckLog.push(s));
+  stuck.openTimeout = 20;
+  const stuckAt = Date.now();
+  const stuckFound = await stuck.find(() => true);
+  ok(stuckFound === null && Date.now() - stuckAt < 500 && stuckLog.some((s) => /timed out/i.test(s)),
+    "fm1ota.js: a busy MIDI port times out and returns control to the installer");
 }
 
 await editorMock();

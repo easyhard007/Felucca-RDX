@@ -83,6 +83,7 @@ const TEXT = {
     stockUnsupported: "このFelucca-RDXは全体バックアップに未対応です。先に最新版をインストールしてください。",
     backup: "全体バックアップ保存中 ", stockError: "公式ファイルを確認できません: ",
     nomidi: "このブラウザでは使えません。Chrome か Edge で開いてください。", loadfail: "読み込めませんでした: ",
+    connect: "MIDI に接続中…", miditimeout: "MIDI の許可要求が応答しませんでした。アドレスバーのサイト設定で MIDI（SysEx）を許可し、MIDI を使う他のアプリやタブを閉じてから、もう一度押してください。",
     start: "開始します", verify: "確認中", loader: "書き込みモードに切り替え中", write: "書き込み中",
     reboot: "再起動中", done: "完了しました", stopped: "途中で止まりました。USB を挿し直してもう一度押してください。",
     error: "エラー: ",
@@ -117,6 +118,7 @@ const TEXT = {
     stockUnsupported: "This Felucca-RDX build does not support complete backups. Install the current Felucca-RDX first.",
     backup: "Saving complete backup ", stockError: "Cannot validate official firmware: ",
     nomidi: "This browser cannot do it. Open the page in Chrome or Edge.", loadfail: "Could not load: ",
+    connect: "Connecting to MIDI…", miditimeout: "The MIDI permission request did not respond. Allow MIDI (SysEx) in the address-bar site settings, close other apps or tabs using MIDI, and press Install again.",
     start: "Starting", verify: "Verifying", loader: "Switching to update mode", write: "Writing",
     reboot: "Restarting", done: "Done", stopped: "Stopped. Replug the USB cable and press Install again.",
     error: "Error: ",
@@ -153,6 +155,19 @@ let writing = false, stock = null, stockFileEpoch = 0;
 const lockInstaller = (on) => { writing = on; $("go").disabled = on || !image || !cleanImage; $("clean-install").disabled = on; $("stock-go").disabled = on || !stock; $("stock-file").disabled = on; $("stock-recovery").disabled = on; };
 window.addEventListener("beforeunload", (e) => { if (writing) { e.preventDefault(); e.returnValue = t("leave"); } });
 
+function deadline(promise, ms, code, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(fail(code, message)), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+async function requestMidi() {
+  sayK("connect");
+  return deadline(navigator.requestMIDIAccess({ sysex: true }), 30000, "miditimeout", "Web MIDI permission timed out");
+}
+function midiError(e) { sayK(e && e.code === "miditimeout" ? "miditimeout" : "denied"); }
+
 (async () => {
   if (!navigator.requestMIDIAccess) { sayK("nomidi"); return; }
   try {
@@ -175,8 +190,8 @@ $("go").addEventListener("click", async () => {
   const installImage = fresh ? cleanImage : image;
   lockInstaller(true);
   let midi;
-  try { midi = await navigator.requestMIDIAccess({ sysex: true }); }
-  catch (e) { sayK("denied"); lockInstaller(false); return; }
+  try { midi = await requestMidi(); }
+  catch (e) { midiError(e); lockInstaller(false); return; }
   try {
     const up = new Updater(midi, log);
     const total = 74 + 1167;
@@ -235,7 +250,7 @@ $("stock-go").addEventListener("click", async () => {
   let link = null;
   try {
     let midi;
-    try { midi = await navigator.requestMIDIAccess({sysex:true}); } catch (e) { sayK("denied"); return; }
+    try { midi = await requestMidi(); } catch (e) { midiError(e); return; }
     const up = new Updater(midi, log);
     const step = (k, n) => { log(`${k} ${n ?? ""}`); if (["start","verify","loader","write","reboot","done"].includes(k)) sayK(k); if (k === "done") $("bar").value = 100; };
     const loader = await up.find(id => id.model === "ota-FM-1", false);

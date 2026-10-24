@@ -10,6 +10,7 @@
 const HS_QUERY = [0xF0, 0x00, 0x32, 0x45, 0x00, 0x00, 0x00, 0x40, 0x7F, 0xF7];
 const UPGRADE = [0xF0, 0x22, 0x24, 0x35, 0x7F, 0xF7];
 const MAXDATA = 512;
+const PORT_OPEN_MS = 3000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const IS_OTA = (id) => /^ota-/i.test(id.model);
 const PORT_HINT = /fm-?1|felucca|ota|composite|sinco|usb[\s-]*midi|m[\s-]*vave/i;
@@ -17,6 +18,17 @@ const PORT_HINT = /fm-?1|felucca|ota|composite|sinco|usb[\s-]*midi|m[\s-]*vave/i
 // errors carry a code the pages translate: notfound, model, stopped, noloader, lost, noreturn,
 // mismatch (detail: the identity the device reports), badreq
 function fail(code, msg, detail = "") { const e = new Error(msg); e.code = code; e.detail = detail; return e; }
+
+/* WebMIDI on Windows can leave MIDIPort.open() pending forever when another
+ * tab or application owns the device.  Bound that wait so the installer can
+ * explain the conflict and re-enable its button. */
+function openPort(port, ms) {
+  let timer;
+  return Promise.race([
+    Promise.resolve().then(() => port.open()),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("MIDI port open timed out")), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 function portLabel(port) {
   const maker = (port.manufacturer || "").trim();
@@ -150,6 +162,7 @@ export class Updater {
   constructor(access, log) {
     this.access = access;
     this.log = log || (() => {});
+    this.openTimeout = PORT_OPEN_MS;
   }
 
   portSummary() {
@@ -166,8 +179,10 @@ export class Updater {
     let opened = false, answered = false;
     if (report) this.log(this.portSummary());
     for (const [input, output] of pairs) {
-      try { await input.open(); await output.open(); }
+      try { await Promise.all([openPort(input, this.openTimeout), openPort(output, this.openTimeout)]); }
       catch (e) {
+        try { input.close(); } catch (_) {}
+        try { output.close(); } catch (_) {}
         if (report) this.log(`Could not open ${portLabel(input)} / ${portLabel(output)}: ${e && e.message || e}`);
         continue;
       }
