@@ -2,12 +2,12 @@
 
 ## 开发环境
 
-- 项目目录：`E:\Projects\fm1\RDX`
+- 项目目录：克隆仓库后生成的 `Felucca-RDX` 目录
 - 构建入口：`build-rdx.ps1`
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 0.6.7
+- 当前版本：Felucca RDX 0.6.10
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
@@ -19,7 +19,8 @@
 在 PowerShell 中运行：
 
 ```powershell
-cd E:\Projects\fm1\RDX
+git clone --recurse-submodules https://github.com/easyhard007/Felucca-RDX.git
+cd Felucca-RDX
 .\build-rdx.ps1
 ```
 
@@ -41,7 +42,7 @@ cd E:\Projects\fm1\RDX
 ## 在网页 FM-1 模拟器中测试
 
 1. 打开 <https://joakimeriksson.github.io/fm1-emu/?fw=local&mhz=100>。
-2. 选择 `Open .fwsc`，加载 `E:\Projects\fm1\RDX\build\felucca.fwsc`。
+2. 选择 `Open .fwsc`，加载项目下的 `build\felucca.fwsc`。
 3. 点击 `Start`，然后使用页面琴键、电脑键盘或 MIDI 输入演奏。
 4. 打开 `SYSTEM > INFO`，观察 Core 0、Core 1、RDX 每声部耗时、WALL、WAIT 和 AUDIO LATE 数据。
 
@@ -78,7 +79,17 @@ RDX 固件只有一个运行时轨道。ALGORITHM 旋钮不再切换轨道，MID
 - `Factory`：32 个 reface DX 原厂音色；
 - `Selected`：21 个导入的第三方 reface DX SysEx 音色。
 
-首页的 `KNOB 4` 是主移调 `Trans.`，范围为 -24 到 +24 半音，默认值为 0。`OCT-` 和 `OCT+` 在 -3 到 +3 个八度之间调节主八度，同时按下两键回到 0。非零八度显示在所有页面顶部正中；八度为 0 时中央保持空白。主移调和八度会同时作用于面板键盘、MIDI 输入、琶音器和音序器；最终音符会限制在 MIDI 0 到 127 范围内。
+首页四个旋钮依次控制 `MODE`、`PORTA`、`GAIN` 和 `Trans.`。`MODE` 提供
+`Poly`、`MonoFull`、`MonoLeg.` 三种 Reface DX 发声方式；`PORTA` 的范围为
+0–127；`GAIN` 的范围为 -24 到 +24 dB，并在加载 Factory/Selected 音色时
+使用 C3、C4、C5 起音后 1 秒内最响的连续 300 ms ITU-R BS.1770 K-weighted 感知
+响度标定默认值，使中高频、短促起音和慢起音都得到更符合听感的权重。用户修改后的 GAIN 会随工程或
+用户音色保存。
+
+`KNOB 4` 的主移调 `Trans.` 范围为 -24 到 +24 半音，默认值为 0。`OCT-` 和
+`OCT+` 在 -3 到 +3 个八度之间调节主八度，同时按下两键回到 0。非零八度显示
+在所有页面顶部正中；八度为 0 时中央保持空白。主移调和八度会同时作用于面板
+键盘、MIDI 输入、琶音器和音序器；最终音符会限制在 MIDI 0 到 127 范围内。
 
 RDX 使用串行立体声 `FX1 -> FX2` 链。Phaser 和 Flanger 可在 `AUDIO` 菜单中切换算法：
 
@@ -115,11 +126,17 @@ FM-1 在 44.1 kHz、128-frame 半缓冲下，每次必须在约 2.90 ms 内完�
 
 ## RDX 数据生成
 
-从 CoreS3 参考工程重新生成 Factory、Selected 和查表数据：
+固件构建直接使用已提交的 `firmware\src\felucca_rdx_data.h`，不依赖原始
+Selected `.syx` 文件。维护者需要更新音色时，可从本机的 CoreS3 参考工程和
+个人音色库重新生成 Factory、Selected 和查表数据：
 
 ```powershell
-python tools\gen_rdx_data.py E:\Projects\CoreS3\reface_cp_assistant\components\rdx_reface firmware\src\felucca_rdx_data.h
+python tools\gen_rdx_data.py <RDX_REFERENCE> firmware\src\felucca_rdx_data.h `
+  --selected "<LOCAL_REFACE_LIBRARY>\selected"
 ```
+
+原始 `.syx` 文件不进入本仓库；生成后的定长参数记录位于
+`firmware\src\felucca_rdx_data.h`，并直接编译进固件。
 
 RDX 音频实现主要位于：
 

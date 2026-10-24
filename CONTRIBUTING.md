@@ -1,14 +1,14 @@
-# Contributing to Felucca
+# Contributing to Felucca RDX
 
 Thanks for helping! To keep things easy to follow, please use the right place:
 
 | What | Where |
 |---|---|
-| A bug you can reproduce | [Issues](https://github.com/hugelton/Felucca/issues/new/choose): one issue per bug |
-| A feature idea or request | [Discussions › Ideas](https://github.com/hugelton/Felucca/discussions/categories/ideas) (no promise it will be added) |
-| How to use it, or how something works | [Discussions › Q&A](https://github.com/hugelton/Felucca/discussions/categories/q-a) |
-| Forks, mods, music, demos | [Discussions › Show and tell](https://github.com/hugelton/Felucca/discussions/categories/show-and-tell) |
-| Anything else | [Discussions › General](https://github.com/hugelton/Felucca/discussions/categories/general) |
+| A bug you can reproduce | [Issues](https://github.com/easyhard007/Felucca-RDX/issues/new/choose): one issue per bug |
+| A feature idea or request | [Discussions › Ideas](https://github.com/easyhard007/Felucca-RDX/discussions/categories/ideas) (no promise it will be added) |
+| How to use it, or how something works | [Discussions › Q&A](https://github.com/easyhard007/Felucca-RDX/discussions/categories/q-a) |
+| Forks, mods, music, demos | [Discussions › Show and tell](https://github.com/easyhard007/Felucca-RDX/discussions/categories/show-and-tell) |
+| Anything else | [Discussions › General](https://github.com/easyhard007/Felucca-RDX/discussions/categories/general) |
 
 Feature requests posted as issues will be moved to Discussions or closed.
 
@@ -34,4 +34,4 @@ The ANALOG, LOFI, TRIO, WHEEL and NOISE engines and the code they share (`firmwa
 [Felucca-Engines](https://github.com/hugelton/Felucca-Engines), under the MIT licence: changes to them go there, as
 pull requests to that repository.
 
-The web editor and installer live in [Felucca-WebApp](https://github.com/hugelton/Felucca-WebApp).
+The RDX web editor and installer are built and published from this repository.

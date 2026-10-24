@@ -15,7 +15,7 @@ Five engines are in a git submodule (`firmware/engines/`, [Felucca-Engines](http
 MIT), so clone with `--recurse-submodules`:
 
 ```
-git clone --recurse-submodules https://github.com/hugelton/Felucca.git
+git clone --recurse-submodules https://github.com/easyhard007/Felucca-RDX.git
 ```
 
 In a clone made without it, run `git submodule update --init` once. GitHub's "Download ZIP" and the source archives

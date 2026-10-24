@@ -1,15 +1,15 @@
 name: Bug report
-description: Something in Felucca doesn't work as it should (one bug per issue)
+description: Something in Felucca RDX doesn't work as it should (one bug per issue)
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Issues are for reproducible bugs only. Feature ideas go to [Discussions › Ideas](https://github.com/hugelton/Felucca/discussions/categories/ideas), questions to [Q&A](https://github.com/hugelton/Felucca/discussions/categories/q-a).
+        Issues are for reproducible bugs only. Feature ideas go to [Discussions › Ideas](https://github.com/easyhard007/Felucca-RDX/discussions/categories/ideas), questions to [Q&A](https://github.com/easyhard007/Felucca-RDX/discussions/categories/q-a).
   - type: input
     id: version
     attributes:
-      label: Felucca version
+      label: Felucca RDX version
       description: Hold HOME > ABOUT on the FM-1
       placeholder: "v1.0.2"
     validations:

@@ -2,10 +2,11 @@
 
 Felucca RDX is dedicated firmware that turns the M-VAVE FM-1 into an
 eight-voice, four-operator synthesizer inspired by the Yamaha reface DX. It is
-based on the open-source Felucca firmware, but the product UI exposes only the
-RDX instrument and its sound sets.
+a modified fork of [Felucca](https://github.com/hugelton/Felucca) by Leo
+Kuroshita / Hügelton Instruments. The product UI exposes only the RDX
+instrument and its sound sets.
 
-The current firmware version is **Felucca RDX 0.6.7**. RDX is monotimbral: the
+The current firmware version is **Felucca RDX 0.6.10**. RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
@@ -21,9 +22,11 @@ Current features include:
 - native Felucca Chorus, Delay and Hall algorithms;
 - fixed-point PicoFaceDX Phaser-RDX and Flanger-RDX algorithms, with the
   original Felucca models retained for A/B comparison;
-- five MIDI velocity curves with Q8.8 velocity inside the RDX engine.
-- a HOME `Trans.` control (±24 semitones) and centred nonzero ±3-octave status shared
-  by panel, MIDI, arpeggiator and sequencer notes.
+- five MIDI velocity curves with Q8.8 velocity inside the RDX engine;
+- HOME controls for Reface `MODE` (`Poly`, `MonoFull`, `MonoLeg.`), `PORTA`
+  (0–127), calibrated per-sound `GAIN` (−24…+24 dB), and `Trans.` (±24
+  semitones), plus centred nonzero ±3-octave status shared by panel, MIDI,
+  arpeggiator and sequencer notes.
 
 The primary build output is `build/felucca.fwsc`. It can be loaded by the
 [FM-1 emulator](https://joakimeriksson.github.io/fm1-emu/?fw=local&mhz=100)
@@ -38,7 +41,8 @@ See [GUIDE.md](GUIDE.md) for the build, simulator and installation workflow.
 From PowerShell:
 
 ```powershell
-cd E:\Projects\fm1\RDX
+git clone --recurse-submodules https://github.com/easyhard007/Felucca-RDX.git
+cd Felucca-RDX
 .\build-rdx.ps1
 ```
 
@@ -51,13 +55,21 @@ component for every firmware delivered to hardware (`0.6.1`, `0.6.2`, ...,
 
 ## Source and licences
 
+The RDX patch format, envelopes, operator behaviour, frequency rules,
+algorithms and parts of the effects implementation derive from
+[RDX_new/PicoFaceDX](https://github.com/Michi71/PicoVintageSynthCollection/tree/main/instruments/PicoFaceDX)
+by Michi71. They were rewritten and optimized as fixed-point C for the JieLi
+AC79 platform. See [CREDITS.md](CREDITS.md) for contributor attribution and
+[LICENSING.md](LICENSING.md) for the file-by-file licence details.
+
 This repository retains parts of upstream Felucca that are still required for
 file-format compatibility, build generation and regression tests. Legacy FM6
 source filenames therefore do not imply that FM6 is exposed as a selectable
 instrument in the RDX firmware.
 
-Felucca RDX is GPL-3.0-only. Bundled and ported components keep their original
-licences; see [LICENSING.md](LICENSING.md) and [LICENSES](LICENSES/).
+Felucca RDX as a whole is distributed under GPL-3.0-only. Bundled and ported
+components keep their compatible original licences.
 
 M-VAVE, FM-1, Yamaha and reface DX are trademarks of their respective owners.
-This project is not affiliated with or endorsed by them.
+This independent community project is not affiliated with or endorsed by
+Yamaha, M-VAVE, Hügelton Instruments or their respective owners.
