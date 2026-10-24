@@ -13,7 +13,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { logicalImage, productOf } from "./fm1pkg.js";
 import { Updater, pack7, unpack7 } from "./fm1ota.js";
@@ -21,8 +22,9 @@ import { Updater, pack7, unpack7 } from "./fm1ota.js";
 let failed = 0;
 const ok = (cond, what) => { console.log(`${what.padEnd(64)} ${cond ? "ok" : "FAIL"}`); if (!cond) failed++; };
 const eq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-const py = (code, ...args) => execFileSync("python3", ["-c", code, ...args], { maxBuffer: 1 << 26 });
-const HERE = new URL(".", import.meta.url).pathname;
+const PYTHON = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
+const py = (code, ...args) => execFileSync(PYTHON, ["-c", code, ...args], { maxBuffer: 1 << 26 });
+const HERE = dirname(fileURLToPath(import.meta.url));
 /* what lives outside web/, each overridable (a web-only checkout passes them, or the checks skip):
    FELUCCA_DESC  the firmware's parameter / protocol table (tests/descdump.c -> build/host/desc.json)
    FELUCCA_TOOLS the firmware's tools (tools/fm1_sample_upload.py, the sample format's reference)
@@ -1583,7 +1585,7 @@ function samplesMatch() {
   });
   const js = E.buildSlot("Mix ä 12345", zones);
   if (existsSync(join(TOOLS, "fm1_sample_upload.py"))) {
-    execFileSync("python3", [join(TOOLS, "fm1_sample_upload.py"), "build", "Mix ä 12345", join(dir, "slot"), ...files]);
+    execFileSync(PYTHON, [join(TOOLS, "fm1_sample_upload.py"), "build", "Mix ä 12345", join(dir, "slot"), ...files]);
     const pyHdr = readFileSync(join(dir, "slot.hdr")), pyData = readFileSync(join(dir, "slot.bin"));
     ok(eq(js.hdr, pyHdr) && eq(js.data, pyData), `samples: editor == sampleio.py (${files.length} WAV formats, ${js.data.length} B)`);
   } else console.log("samples: editor == sampleio.py (no FELUCCA_TOOLS)                skip");
@@ -1645,12 +1647,12 @@ class FakeFM1 {
     this.access = { inputs: new Map(), outputs: new Map() };
     this.boot("FM-1_015", "FM-1");
   }
-  boot(identity, name) {
+  boot(identity, name, outputName = name) {
     this.identity = identity; this.waiting = null; this.queue = [];
     for (const m of [this.access.inputs, this.access.outputs]) { for (const p of m.values()) p.state = "disconnected"; m.clear(); }
     const id = Math.random().toString(36).slice(2);
     this.input = { id: "i" + id, name, state: "connected", onmidimessage: null, open: async () => {} };
-    this.output = { id: "o" + id, name, state: "connected", open: async () => {}, send: (d) => {
+    this.output = { id: "o" + id, name: outputName, state: "connected", open: async () => {}, send: (d) => {
       if (this.output.state !== "connected") throw new Error("InvalidStateError");
       setTimeout(() => this.rx(Array.from(d)), 1);
     } };
@@ -1714,6 +1716,13 @@ async function updater() {
   ok(e && e.code === "lost", "fm1ota.js: unplugged in step 1 -> error code 'lost'");
   const e2 = await new Updater({ inputs: new Map(), outputs: new Map() }).install(image, "FM-1_900").then(() => null, (x) => x);
   ok(e2 && e2.code === "notfound", "fm1ota.js: no device -> error code 'notfound'");
+
+  const dev4 = new FakeFM1(image);
+  dev4.boot("FM-1_900", "MIDIIN2 (Felucca)", "MIDIOUT2 (Felucca)");
+  const found = await new Updater(dev4.access).find((id) => id.model === "FM-1");
+  ok(found && found.id.text === "FM-1_900",
+    "fm1ota.js: pairs Windows MIDIIN/MIDIOUT names for the same Felucca device");
+  found?.link.close();
 }
 
 await editorMock();

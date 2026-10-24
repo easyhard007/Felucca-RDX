@@ -12,10 +12,48 @@ const UPGRADE = [0xF0, 0x22, 0x24, 0x35, 0x7F, 0xF7];
 const MAXDATA = 512;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const IS_OTA = (id) => /^ota-/i.test(id.model);
+const PORT_HINT = /fm-?1|felucca|ota|composite|sinco|usb[\s-]*midi|m[\s-]*vave/i;
 
 // errors carry a code the pages translate: notfound, model, stopped, noloader, lost, noreturn,
 // mismatch (detail: the identity the device reports), badreq
 function fail(code, msg, detail = "") { const e = new Error(msg); e.code = code; e.detail = detail; return e; }
+
+function portLabel(port) {
+  const maker = (port.manufacturer || "").trim();
+  const name = (port.name || "").trim() || "unnamed";
+  return maker && !name.toLowerCase().includes(maker.toLowerCase()) ? `${name} (${maker})` : name;
+}
+
+/* Windows often exposes one USB-MIDI cable as e.g. "MIDIIN2 (Felucca)" and
+ * "MIDIOUT2 (Felucca)".  Web MIDI has no shared input/output port id, so strip
+ * only the host's direction labels before pairing; the identity handshake is
+ * still the authority that says the pair is an FM-1. */
+function portKey(port) {
+  return (port.name || "").toLowerCase()
+    .replace(/\bmidi\s*(?:in|out|input|output)\s*\d*\b/g, " ")
+    .replace(/\b(?:in|out|input|output)\s*\d*\b/g, " ")
+    .replace(/\b(?:usb|midi|port)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isCandidate(port) {
+  return port.state !== "disconnected" && PORT_HINT.test(`${port.name || ""} ${port.manufacturer || ""}`);
+}
+
+function portPairs(inputs, outputs) {
+  const pairs = [], seen = new Set();
+  const add = (input, output) => {
+    const key = `${input.id || input.name}\0${output.id || output.name}`;
+    if (!seen.has(key)) { seen.add(key); pairs.push([input, output]); }
+  };
+  for (const input of inputs) for (const output of outputs)
+    if ((input.name || "") === (output.name || "")) add(input, output);
+  for (const input of inputs) for (const output of outputs)
+    if (portKey(input) && portKey(input) === portKey(output)) add(input, output);
+  if (inputs.length === 1 && outputs.length === 1) add(inputs[0], outputs[0]);
+  for (const input of inputs) for (const output of outputs) add(input, output);
+  return pairs;
+}
 
 export function pack7(data) {
   const out = []; let acc = 0, nb = 0;
@@ -114,27 +152,43 @@ export class Updater {
     this.log = log || (() => {});
   }
 
-  // every in/out pair with the same port name that answers the handshake
-  async find(filter) {
-    const outs = [...this.access.outputs.values()];
-    for (const input of this.access.inputs.values()) {
-      if (input.state === "disconnected") continue;
-      if (!/fm-1|felucca|ota|composite|sinco|usb-midi/i.test(input.name || "")) continue;   // never probe other gear
-      const output = outs.find((o) => o.name === input.name && o.state !== "disconnected");
-      if (!output) continue;
-      try { await input.open(); await output.open(); } catch (_) { continue; }
+  portSummary() {
+    const list = (ports) => [...ports.values()].filter((p) => p.state !== "disconnected").map(portLabel);
+    const ins = list(this.access.inputs), outs = list(this.access.outputs);
+    return `Web MIDI inputs: ${ins.length ? ins.join(", ") : "none"}; outputs: ${outs.length ? outs.join(", ") : "none"}`;
+  }
+
+  // Candidate names protect other MIDI gear; the handshake confirms the FM-1.
+  async find(filter, report = true) {
+    const inputs = [...this.access.inputs.values()].filter(isCandidate);
+    const outputs = [...this.access.outputs.values()].filter(isCandidate);
+    const pairs = portPairs(inputs, outputs);
+    let opened = false, answered = false;
+    if (report) this.log(this.portSummary());
+    for (const [input, output] of pairs) {
+      try { await input.open(); await output.open(); }
+      catch (e) {
+        if (report) this.log(`Could not open ${portLabel(input)} / ${portLabel(output)}: ${e && e.message || e}`);
+        continue;
+      }
+      opened = true;
       const link = new Link(input, output);
       const id = await handshake(link, 2);
+      if (id) answered = true;
       if (id && (!filter || filter(id))) return { link, id, name: input.name };
       link.close();
     }
+    if (report && (!inputs.length || !outputs.length))
+      this.log("No FM-1/Felucca MIDI input and output pair is visible to this site.");
+    else if (report && pairs.length && opened && !answered)
+      this.log("FM-1/Felucca ports are visible, but the device did not answer. Close other MIDI apps, reconnect USB, and try again.");
     return null;
   }
 
   async waitFor(filter, ms) {
     const end = Date.now() + ms;
     while (Date.now() < end) {
-      const dev = await this.find(filter);
+      const dev = await this.find(filter, false);
       if (dev) return dev;
       await sleep(1000);
     }
@@ -174,7 +228,7 @@ export class Updater {
   async install(image, product, onStep) {
     const step = onStep || (() => {});
     const dev = await this.find((id) => !IS_OTA(id));
-    if (!dev) throw fail("notfound", "FM-1 not found (USB cable, and no other app using it?)");
+    if (!dev) throw fail("notfound", `FM-1 not found (check the USB cable and close other MIDI apps). ${this.portSummary()}`);
     const [model] = product.split("_");
     if (dev.id.model !== model) { dev.link.close(); throw fail("model", `the device is ${dev.id.text}, the package is for ${product}`); }
     step("start", dev.id.text);

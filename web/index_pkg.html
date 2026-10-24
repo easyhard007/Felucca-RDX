@@ -189,7 +189,7 @@ $("go").addEventListener("click", async () => {
       if (k === "reboot") sayK("reboot");
       if (k === "done") { $("bar").value = 100; sayK("done"); }
     };
-    const ota = await up.find((id) => /^ota-/i.test(id.model));
+    const ota = await up.find((id) => /^ota-/i.test(id.model), false);
     if (ota) {
       ota.link.close();
       sayK((await up.resume(installImage, step, meta.product)) ? "done" : "stopped");
@@ -238,7 +238,7 @@ $("stock-go").addEventListener("click", async () => {
     try { midi = await navigator.requestMIDIAccess({sysex:true}); } catch (e) { sayK("denied"); return; }
     const up = new Updater(midi, log);
     const step = (k, n) => { log(`${k} ${n ?? ""}`); if (["start","verify","loader","write","reboot","done"].includes(k)) sayK(k); if (k === "done") $("bar").value = 100; };
-    const loader = await up.find(id => id.model === "ota-FM-1");
+    const loader = await up.find(id => id.model === "ota-FM-1", false);
     if (loader) {
       loader.link.close();
       if (!$("stock-recovery").checked) { sayK("stockNeedBackup"); return; }
