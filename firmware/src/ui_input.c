@@ -1033,6 +1033,12 @@ static void edit_param(uint32_t slot, int32_t steps)
             ui.ppick = (uint8_t)clamp((int32_t)pat_pick() + steps, 0, (int32_t)pat_count() - 1);
         return;
     }
+#if FELUCCA_RDX
+    if (rdx_ui_page(pg->graph)) {
+        rdx_ui_knob(slot, steps);
+        return;
+    }
+#endif
     if (fop_page(pg->graph)) {                           /* FM6's operators: KNOB 1 OP, 2..4 its bytes (ui_fm6op.c) */
         fop_knob(slot, steps);
         return;
@@ -1779,9 +1785,20 @@ static void ui_input(void)
     kq |= lay;
     if (!lay && (s = panel_enc(EN_PRESET)) != 0)
         presets_turn(s);
-    if (!lay && (s = panel_enc(EN_ALGO)) != 0)     /* ALGORITHM: the selected track, on every page */
-        track_select((uint32_t)clamp((int32_t)song.sel + (s > 0 ? 1 : -1), 0, NTRK - 1));
+    if (!lay && (s = panel_enc(EN_ALGO)) != 0) {   /* RDX: the patch algorithm and its editor page */
+#if FELUCCA_RDX
+        if (TSEL->engine == ENGI_RDX)
+            rdx_ui_algorithm_turn(s);
+        else
+#endif
+            track_select((uint32_t)clamp((int32_t)song.sel + (s > 0 ? 1 : -1), 0, NTRK - 1));
+    }
     if ((s = glo ? sel : panel_enc(EN_SELECT)) != 0) {   /* SELECT knob = global tempo; */
+#if FELUCCA_RDX
+        if (!glo && rdx_ui_row_ptr(cur_page()->graph)) {
+            rdx_ui_select(s > 0 ? 1 : -1);
+        } else
+#endif
         if (!glo && rdx_touch_wah_active(TSEL)) {
             char b[8];
             uint32_t v = rdx_touch_wah_turn(TSEL, accel(EN_SELECT, s, 127));
@@ -1826,7 +1843,11 @@ static void ui_input(void)
         }
         if (ui.home || pg->scope == SC_STEP || pg->scope == SC_TRK || page_desc(pg, k, &hv) ||
             ((pg->graph == GR_USER || pg->graph == GR_MOD || pg->graph == GR_PATS) && k == 0u)
-            || pg->graph == GR_SONG || (pg->graph == GR_SLICES && k < 2u) || fop_page(pg->graph)) {   /* (not an empty
+            || pg->graph == GR_SONG || (pg->graph == GR_SLICES && k < 2u) || fop_page(pg->graph)
+#if FELUCCA_RDX
+            || rdx_ui_page(pg->graph)
+#endif
+            ) {   /* (not an empty
                                                                                                           * column) */
             ui.hot_col = (uint8_t)k;
             ui.hot_t = 40;

@@ -13,6 +13,7 @@
 /* the height ADSR and LFO are drawn on: 100 px, or (MENU > LARGE's strip: draw_graph) the strip's ~ 56 */
 static int32_t graph_ht = 100;
 #include "ui_fm6op.c"                                /* EDIT > OPERATOR, OP ENV, OPERATOR 2: FM6's operators (their charts below) */
+#include "ui_rdx.c"                                  /* RDX common, pitch-envelope and operator editor */
 
 /* Matches voice.c: attack is linear, decay and release are exponential
  * (env += (target - env) * k each tick, ~99 % after the set time). Time
@@ -1198,6 +1199,10 @@ static uint32_t graph_signature(void)
     if (ui.home)
         return h ^ (ui.frame / 2u);                  /* scope: redraw every other frame */
     h ^= (uint32_t)pg->graph * 131u + TSEL->eng_req + song.sel * 7777u + ui.page * 1291u;
+#if FELUCCA_RDX
+    if (rdx_ui_page(pg->graph))
+        h ^= rdx_ui_signature();
+#endif
     if (strip_kind() == SK_TITLE)                    /* MENU > LARGE: the page's title (its engine, its number) */
         return h ^ 0x5A17u;
     if (pg->graph == GR_NONE || pg->graph == GR_ARP) h ^= ui.frame / 2u;
@@ -2276,6 +2281,19 @@ static void draw_graph(void)
         graph_scope(c);
     } else {
         switch (pg->graph) {
+#if FELUCCA_RDX
+        case GR_RDX_ALG:
+        case GR_RDX_EG:
+        case GR_RDX_KSC:
+        case GR_RDX_MOD:
+        case GR_RDX_LVL:
+        case GR_RDX_FREQ:
+        case GR_RDX_PEGR:
+        case GR_RDX_PEGL:
+        case GR_RDX_LFO:
+            rdx_ui_graph(pg->graph);
+            break;
+#endif
         case GR_ADSR:
             graph_adsr(t, c);
             break;

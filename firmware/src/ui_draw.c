@@ -1144,6 +1144,16 @@ static void draw_columns(void)
         draw_rdx_fx_thru();
         return;
     }
+    if (rdx_ui_page(cur_page()->graph)) {
+        for (c = 0; c < 4u; c++) {
+            const char *lb, *u;
+            int32_t r;
+            uint32_t ic;
+            int on = rdx_ui_card(c, &lb, val, &u, &r, &ic);
+            draw_column(c, lb, val, u, on ? VAL(c) : T_DIM, r, ic);
+        }
+        return;
+    }
 #endif
     if (cur_page()->graph == GR_SONG) {             /* SECTION, TRACK, its PAT (A..D, -), REPS (the section's) */
         uint32_t row = ui.song_row < CHAIN_ROWS ? ui.song_row : CHAIN_ROWS - 1u, k = ui.song_trk % NTRK, sl;

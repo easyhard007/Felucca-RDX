@@ -80,6 +80,14 @@ ENG_MEM_FITS("RDX", sizeof(rdx_note_t) * RDX_POLY);
 static const uint8_t RDX_CARRIERS[12] = {
     0x1, 0x1, 0x1, 0x1, 0x1, 0x3, 0x3, 0x5, 0x7, 0x7, 0x7, 0xF
 };
+/* Destination masks for each source operator.  They mirror the twelve
+ * specialized kernels and are shared with the on-device algorithm diagram. */
+static const uint8_t RDX_ROUTES[12][4] = {
+    {0x0,0x1,0x2,0x4}, {0x0,0x1,0x2,0x2}, {0x0,0x1,0x2,0x1},
+    {0x0,0x1,0x1,0x6}, {0x0,0x1,0x1,0x1}, {0x0,0x0,0x2,0x4},
+    {0x0,0x0,0x3,0x4}, {0x0,0x1,0x0,0x4}, {0x0,0x0,0x0,0x7},
+    {0x0,0x0,0x0,0x6}, {0x0,0x0,0x0,0x4}, {0x0,0x0,0x0,0x0}
+};
 
 /* A track owns one editable Reface patch.  Main-loop SysEx writes the inactive
  * copy and flips the selector only after the full 150 bytes are visible; the
@@ -209,6 +217,8 @@ static void rdx_patch_sanitize(rdx_patch_t *p)
         o->peg_enable = !!o->peg_enable;
         o->fb_type = !!o->fb_type;
         o->freq_mode = !!o->freq_mode;
+        o->freq_coarse = (uint8_t)clamp(o->freq_coarse, 0, 31);
+        o->freq_fine = (uint8_t)clamp(o->freq_fine, 0, 99);
     }
 }
 
@@ -748,8 +758,8 @@ static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel_q8,
 
 static uint32_t rdx_algorithm(const track_t *t, const rdx_patch_t *p)
 {
-    int32_t a = t->p[P_E0];
-    return a ? (uint32_t)clamp(a - 1, 0, 11) : p->common.algorithm % 12u;
+    (void)t;
+    return p->common.algorithm % 12u;
 }
 
 /* The RDX build is one instrument, so its track transpose and the panel octave

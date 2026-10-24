@@ -7,12 +7,12 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 0.6.12
+- 当前版本：Felucca RDX 0.6.13
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
 
-版本号只在 `firmware\src\rdx_version.h` 中维护。每次向真机交付一份新固件时递增最后一段版本号，例如 `0.6.1 -> 0.6.2 -> ... -> 0.6.12`。启动画面、模拟器和安装器会读取同一版本。
+版本号只在 `firmware\src\rdx_version.h` 中维护。每次向真机交付一份新固件时递增最后一段版本号，例如 `0.6.1 -> 0.6.2 -> ... -> 0.6.13`。启动画面、模拟器和安装器会读取同一版本。
 
 ## 编译固件
 

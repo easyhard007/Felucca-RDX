@@ -505,7 +505,10 @@ enum { FAM_HOME, FAM_ENV, FAM_LFO, FAM_FX, FAM_SCL, FAM_EDIT, FAM_GLO, FAM_SAVE,
 enum { SC_TRACK, SC_GLOBAL, SC_ENGINE, SC_STEP, SC_TRK };   /* SC_TRK: the TRACKS page (ui_input.c tracks_edit) */
 enum { GR_NONE, GR_ADSR, GR_LFO, GR_STEPS, GR_ARP, GR_SCALE, GR_FX, GR_ROLL, GR_BROWSE, GR_SLOTS, GR_USER, GR_TRK,
        GR_SLCR, GR_MOD, GR_PATS, GR_SONG, GR_TOOLS, GR_CHORD, GR_SLICES, GR_EVENTS,
-       GR_FMOP, GR_FMOP2, GR_FMENV, GR_INS };   /* (GR_STEPS: SEQ TOOLS' knobs; GR_FMOP..: FM6's operator pages, ui_fm6op.c) */
+       GR_FMOP, GR_FMOP2, GR_FMENV,
+       GR_RDX_ALG, GR_RDX_EG, GR_RDX_KSC, GR_RDX_MOD, GR_RDX_LVL, GR_RDX_FREQ,
+       GR_RDX_PEGR, GR_RDX_PEGL, GR_RDX_LFO, GR_INS };
+       /* GR_RDX_*: the raw 150-byte RDX voice editor (ui_rdx.c). */
 
 typedef struct {
     const char *title;
@@ -514,6 +517,11 @@ typedef struct {
 } page_t;
 
 static const page_t PAGES[] = {
+#if FELUCCA_RDX
+    {"PEG RATE", FAM_ENV, SC_TRACK, GR_RDX_PEGR, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"PEG LEVEL", FAM_ENV, SC_TRACK, GR_RDX_PEGL, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"RDX LFO", FAM_LFO, SC_TRACK, GR_RDX_LFO, {0xFF, 0xFF, 0xFF, 0xFF}},
+#else
     {"ENV", FAM_ENV, SC_TRACK, GR_ADSR, {P_ATK, P_DEC, P_SUS, P_REL}},
     {"ENV DEST", FAM_ENV, SC_TRACK, GR_NONE, {P_ED_FLT, P_ED_PIT, P_ED_SHP, P_ESYNC}},   /* (P_ED_FX: nothing reads it);
                                                                              * 1.5: ESYNC, ENV's times as note values */
@@ -521,6 +529,7 @@ static const page_t PAGES[] = {
     {"LFO 2", FAM_LFO, SC_TRACK, GR_LFO, {P_LSYNC, P_LTRIG, P_LPOL, 0xFF}},   /* 1.2: SYNC TRIG POL */
     {"LFO DEST", FAM_LFO, SC_TRACK, GR_NONE, {P_LD_PIT, P_LD_FLT, P_LD_SHP, P_LD_AMP}},
     {"MOD", FAM_LFO, SC_TRACK, GR_MOD, {0xFF, P_M1SRC, P_M1DST, P_M1AMT}},   /* KNOB 1: the slot (mod_ui_slot) */
+#endif
 #if FELUCCA_RDX
     {"FX", FAM_FX, SC_TRACK, GR_NONE, {P_DIST, P_CHOR, P_DLY, P_REV}},
     {"FX1", FAM_FX, SC_TRACK, GR_NONE, {P_ITYPE, P_IA, P_IB, P_IC}},
@@ -538,6 +547,14 @@ static const page_t PAGES[] = {
 #endif
     {"SCL", FAM_SCL, SC_TRACK, GR_SCALE, {P_ROOT, P_SCALE, P_QUANT, P_TRANS}},
     {"CHORD", FAM_SCL, SC_TRACK, GR_CHORD, {P_CHRD, P_VOIC, 0xFF, 0xFF}},   /* SCL again: the chord keys (chord.c) */
+#if FELUCCA_RDX
+    {"ALGORITHM", FAM_EDIT, SC_TRACK, GR_RDX_ALG, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"OP EG", FAM_EDIT, SC_TRACK, GR_RDX_EG, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"SCALING", FAM_EDIT, SC_TRACK, GR_RDX_KSC, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"OP MOD", FAM_EDIT, SC_TRACK, GR_RDX_MOD, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"OP LEVEL", FAM_EDIT, SC_TRACK, GR_RDX_LVL, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"FREQUENCY", FAM_EDIT, SC_TRACK, GR_RDX_FREQ, {0xFF, 0xFF, 0xFF, 0xFF}},
+#else
     {"EDIT 1", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E0, P_E1, P_E2, P_E3}},
     {"EDIT 2", FAM_EDIT, SC_ENGINE, GR_NONE, {P_E4, P_E5, P_E6, P_E7}},
     {"FILTER", FAM_EDIT, SC_TRACK, GR_NONE, {P_FTYPE, P_E4, P_E5, P_E7}},   /* ANALOG only (1.5, #104): TYPE CUT RES KTR */
@@ -555,6 +572,7 @@ static const page_t PAGES[] = {
     {"VOICE", FAM_EDIT, SC_TRACK, GR_NONE, {P_VOICE, P_GLIDE, P_GLMODE, P_PRIO}},
     {"VOICE 2", FAM_EDIT, SC_TRACK, GR_NONE, {P_ALLOC, P_DETUNE, P_PAN, P_MUTE}},
     {"VOICE 3", FAM_EDIT, SC_TRACK, GR_NONE, {P_SPRD, 0xFF, 0xFF, 0xFF}},   /* #148: SPREAD */
+#endif
     /* 1.2 (Discussion #153): a family's pages go round in this order, a tap of its button each (ui.c open_family) */
     {"SONG", FAM_GLO, SC_GLOBAL, GR_SONG, {0xFF, 0xFF, 0xFF, 0xFF}},        /* GLO's only page (1.2; up to 1.1.5 SEQ's) */
     /* SAVE's taps (1.5, #173): USER (SAVE from another page: the quick save, SAVE OCT+ OCT+), PRESETS (the engines and

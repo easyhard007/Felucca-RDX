@@ -451,6 +451,11 @@ static uint32_t large_kind(void)
     if (ui.home)                                        /* (HOME > TRACKS: its rows need the panel, the cards as on */
         return home_tracks() ? LK_LABEL : LK_TALL;      /* a list page; the rows' names in M: draw_home_tracks) */
     g = cur_page()->graph;
+#if FELUCCA_RDX
+    /* RDX uses the full panel for algorithm/envelope diagrams and matrix rows. */
+    if (g >= GR_RDX_ALG && g <= GR_RDX_LFO)
+        return LK_LABEL;
+#endif
     return g == GR_BROWSE || g == GR_SLOTS || g == GR_USER || g == GR_PATS || g == GR_SONG || g == GR_ROLL ||
            g == GR_SLICES || g == GR_EVENTS ? LK_LABEL : LK_TALL;
 }
@@ -485,6 +490,10 @@ static uint32_t layer_btn(void);
  * track's (its patch's operators, ui_fm6op.c) */
 static int page_visible(uint32_t i)
 {
+#if FELUCCA_RDX
+    if (PAGES[i].graph >= GR_RDX_ALG && PAGES[i].graph <= GR_RDX_LFO)
+        return TSEL->eng_req % NENGINES == ENGI_RDX;
+#endif
     if (PAGES[i].scope == SC_TRACK && PAGES[i].id[0] >= P_LN0 && PAGES[i].id[0] <= P_LN7)
         return TSEL->eng_req % NENGINES == ENGI_DRUM;
     if (PAGES[i].id[0] == P_FTYPE)                    /* FILTER (1.5, #104): ANALOG's */
@@ -836,6 +845,12 @@ static void open_family(uint32_t fam)
         ui.page = (uint8_t)i;                         /* SAVE enters the sound save screen directly */
     } else {
         uint32_t i = ui.fam_last[fam];
+#if FELUCCA_RDX
+        /* EDIT is a coherent six-page RDX editor.  Enter it at its algorithm
+         * overview; repeated EDIT taps still advance through all six pages. */
+        if (fam == FAM_EDIT && TSEL->eng_req % NENGINES == ENGI_RDX)
+            i = page_first(fam);
+#endif
         ui.page = (uint8_t)(i && i < NPAGES && PAGES[i].fam == fam && page_visible(i) ? i : page_first(fam));
     }
     ui.fam_last[fam] = ui.page;
