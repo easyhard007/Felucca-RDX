@@ -18,6 +18,7 @@ static const char *const RDX_FX_NAMES[RFX_N] = {
     "THRU", "DIST", "WAH", "CHORUS", "FLANGE", "PHASER", "DELAY", "REVERB"
 };
 #define RDX_FX_MARK 126
+#define RDX_GAIN_MARK 62                         /* P_ED_FX: distinct from 0.6.8/0.6.9's marker 63 */
 
 typedef struct __attribute__((packed)) {
     uint8_t voice_name[10], reserved1[2], transpose, mono_poly, porta_time, pb_range;
@@ -350,6 +351,7 @@ static void rdx_track_loaded(track_t *t)
     rdx_track_slot[tr] = (uint8_t)slot;
     rdx_mode_apply(t, rdx_track_get(tr));
     rdx_fx_from_patch(t, rdx_track_get(tr));
+    t->p[P_ED_FX] = RDX_GAIN_MARK;
 }
 
 /* Project and user-preset records predate the 150-byte RDX patch and therefore
@@ -360,6 +362,8 @@ static void rdx_track_restored(track_t *t)
 {
     uint32_t slot = t->preset;
     int keep_fx = t->p[P_IMIX] == RDX_FX_MARK;
+    int keep_gain = t->p[P_ED_FX] == RDX_GAIN_MARK;
+    int16_t saved_gain = t->p[P_E2];
     int16_t saved[13];
     uint32_t i;
     if (keep_fx) {
@@ -376,6 +380,10 @@ static void rdx_track_restored(track_t *t)
     if (t->eng_req != ENGI_RDX)
         return;
     rdx_track_loaded(t);
+    /* P_E2 was MLVL before 0.6.8.  The revision marker prevents an old or
+     * differently calibrated autosave from overriding the current per-preset
+     * default; projects saved by this calibration retain user-edited GAIN. */
+    t->p[P_E2] = keep_gain ? saved_gain : RDX_PRESET_GAIN_DB[(uint32_t)t->p[P_E7]];
     if (keep_fx) {
         t->p[P_DIST] = saved[0]; t->p[P_CHOR] = saved[1];
         t->p[P_DLY] = saved[2];  t->p[P_REV] = saved[3];
@@ -390,6 +398,7 @@ static void rdx_sysex_patch_set(uint32_t tr, const rdx_patch_t *p)
     rdx_track_set(tr, p, 1);
     rdx_mode_apply(t, rdx_track_get(tr));
     rdx_fx_from_patch(t, rdx_track_get(tr));
+    t->p[P_ED_FX] = RDX_GAIN_MARK;
 }
 
 static void rdx_patch_for_track(uint32_t tr, rdx_patch_t *out)
@@ -723,14 +732,14 @@ static uint32_t rdx_velocity_gain_q15(uint32_t vel_q8, uint32_t sens)
     return (uint32_t)(((127u - sens) * 32768u + sens * vr) / 127u);
 }
 
-static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel_q8, int32_t level_macro,
+static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel_q8,
                                 int32_t velocity_macro, uint32_t note)
 {
     uint32_t sens = (uint32_t)clamp((int32_t)p->vel_sens + velocity_macro, 0, 127);
     uint32_t vg = rdx_velocity_gain_q15(vel_q8, sens);
     uint32_t level;
     vg = (vg * 35389u) >> 15;                       /* reference engine's 1.08 velocity headroom */
-    level = (uint32_t)clamp((int32_t)p->out_level + level_macro, 0, 127);
+    level = p->out_level;
     level = (level * vg) >> 15;
     return (uint32_t)(((uint64_t)RDX_GAIN_Q15[level > 191u ? 191u : level] *
                        rdx_level_scaling(p, note)) >> 15);
@@ -804,13 +813,12 @@ static void rdx_note_on(track_t *t, voice_t *v)
         rdx_op_t *o = &n->op[k];
         int carrier = (carriers >> k) & 1u;
         int32_t spread = 0, ratio_macro = carrier ? 0 : t->p[P_E3];
-        int32_t level_macro = carrier ? 0 : t->p[P_E2];
         if (carrier) {
             static const int8_t SPREAD[4] = {0, 1, -1, 2};
             spread = SPREAD[carrier_index++] * (int32_t)t->p[P_E6] * 12 / 127;
         }
         o->inc = rdx_op_inc(q, base_inc, ratio_macro, spread);
-        o->out_gain = rdx_output_gain(q, vel_q8, level_macro, t->p[P_E5], note);
+        o->out_gain = rdx_output_gain(q, vel_q8, t->p[P_E5], note);
         o->rate_offset = (uint8_t)rdx_rate_offset(note, q->rate_scaling);
         o->stage = RDX_ATTACK;
         o->target = RDX_ENV_TARGET_Q16[q->eg_level[0] & 127u];
@@ -1062,9 +1070,9 @@ static const char *const N_RDX_ALG[] = {
 static const char *const N_RDX_PATCH[] = { RDX_FOR_EACH_PATCH(RDX_NAME) 0 };
 #undef RDX_NAME
 
-#define RDX_PR(I) {RDX_PATCHES[(I)].name, {0, 0, 0, 0, 0, 0, 0, (I)}, {0, 0, 127, 0}, 0, 0, FX(0, 0, 0, 0)},
+#define RDX_PR(I, G) {RDX_PATCHES[(I)].name, {0, 0, (G), 0, 0, 0, 0, (I)}, {0, 0, 127, 0}, 0, 0, FX(0, 0, 0, 0)},
 static const preset_t RDX_PRESETS[] = {
-    RDX_FOR_EACH_PATCH(RDX_PR)
+    RDX_FOR_EACH_PATCH_GAIN(RDX_PR)
 };
 #undef RDX_PR
 
@@ -1074,7 +1082,7 @@ static const engine_t ENG_RDX = {
     .edit = {
         {"ALG", F_INT, 0, 12, 0, N_RDX_ALG, 0},
         {"FB", F_BIPCT, -64, 63, 0, 0, 0},
-        {"MLVL", F_BIPCT, -64, 63, 0, 0, 0},
+        {"GAIN", F_SEMI, -24, 24, 0, 0, "dB"},
         {"MRAT", F_INT, -16, 16, 0, 0, 0},
         {"MEG", F_BIPCT, -64, 63, 0, 0, 0},
         {"VELO", F_BIPCT, -64, 63, 0, 0, 0},
@@ -1085,7 +1093,7 @@ static const engine_t ENG_RDX = {
     .npresets = NELEM(RDX_PRESETS),
     .note_on = rdx_note_on,
     .render = rdx_render,
-    .knob = {P_E2, P_E3, P_E1, P_TRANS},
+    .knob = {P_VOICE, P_GLIDE, P_E2, P_TRANS},
     .poly = RDX_POLY,
     .ownenv = 1,
     .done = rdx_done,

@@ -112,11 +112,50 @@ for (let i = 0; i < 24; i++) {
   if (!c) break;
   firmwareVersion += String.fromCharCode(c);
 }
-check("RDX firmware identifies itself as Felucca RDX 0.6.7", firmwareVersion === "RDX 0.6.7");
+check("RDX firmware identifies itself as Felucca RDX 0.6.10", firmwareVersion === "RDX 0.6.10");
+check("HOME exposes MODE, PORTA, GAIN and Trans. in that order",
+      d.ex.web_test_rdx_home_layout() === 1 &&
+      cstr(d.ex.web_test_rdx_home_label_byte, 0) === "MODE" &&
+      cstr(d.ex.web_test_rdx_home_label_byte, 1) === "PORTA" &&
+      cstr(d.ex.web_test_rdx_home_label_byte, 2) === "GAIN" &&
+      cstr(d.ex.web_test_rdx_home_label_byte, 3) === "Trans.");
 check("HOME knob 4 is the Trans. master transpose control",
       d.ex.web_test_rdx_home_knob4_is_transpose() === 1 &&
-      cstr(d.ex.web_test_rdx_home_label_byte, 0) === "Trans." &&
+      cstr(d.ex.web_test_rdx_home_label_byte, 3) === "Trans." &&
       d.ex.web_test_rdx_home_icon_is_transpose() === 1);
+d.ex.web_test_rdx_voice_mode_set(1);
+check("RDX mode names retain the full Reface wording",
+      cstr(d.ex.web_test_rdx_home_value_byte, 0) === "MonoFull");
+d.ex.web_test_rdx_voice_mode_set(2);
+check("RDX legato mode is shown as MonoLeg.",
+      cstr(d.ex.web_test_rdx_home_value_byte, 0) === "MonoLeg.");
+d.ex.web_test_rdx_porta_set(127);
+check("HOME PORTA covers the complete 0..127 range",
+      cstr(d.ex.web_test_rdx_home_value_byte, 1) === "127");
+d.ex.web_test_rdx_gain_set(6);
+check("HOME GAIN is a signed -24..+24 dB control",
+      d.ex.web_test_rdx_gain() === 6 && cstr(d.ex.web_test_rdx_home_value_byte, 2) === "+6");
+let gainPrecisionOk = true;
+const gainSamples = [-32767, -4097, -257, -17, -1, 1, 17, 257, 4097, 32767];
+for (let gain = -24; gain <= 24; gain++) {
+  for (const sample of gainSamples) {
+    const actual = d.ex.web_test_rdx_gain_sample(sample, gain);
+    const expected = Math.round(sample * 10 ** (gain / 20));
+    gainPrecisionOk &&= Math.abs(actual - expected) <= 1;
+    if (gain === 1) gainPrecisionOk &&= actual !== 0;
+  }
+}
+check("GAIN preserves low-level samples and stays linear over -24..+24 dB", gainPrecisionOk);
+d.ex.web_test_rdx_gain_set(0);
+check("preset loads install their measured loudness calibration",
+      (d.ex.web_test_rdx_preset(0), d.ex.web_test_rdx_gain()) === 8 &&
+      (d.ex.web_test_rdx_preset(51), d.ex.web_test_rdx_gain()) === -5);
+check("old autosaves migrate from MLVL to the preset GAIN default",
+      d.ex.web_test_rdx_restore_gain(0, -17, 0) === 8);
+check("0.6.8/0.6.9 autosaves migrate to the new perceptual GAIN default",
+      d.ex.web_test_rdx_restore_previous_gain(0, -3) === 8);
+check("new autosaves preserve a user-edited GAIN",
+      d.ex.web_test_rdx_restore_gain(0, -3, 1) === -3);
 check("RDX header is empty at octave zero and shows octave only when shifted",
       d.ex.web_test_rdx_header_center_ink(0) === 0 &&
       d.ex.web_test_rdx_header_center_ink(1) > 0 &&

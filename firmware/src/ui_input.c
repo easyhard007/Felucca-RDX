@@ -1834,9 +1834,17 @@ static void ui_input(void)
         if (ui.home) {
             int16_t *vp;
             const param_desc_t *d = home_param(k, &vp);
+            int16_t old = *vp;
+            track_t *t = home_trk(k);
+            uint32_t id = (uint32_t)(vp - t->p);
             *vp = (int16_t)param_turn(d, *vp, accel(EN_K1 + k, s, d->fmt == F_ENUM ? 0 : d->max - d->min));
-            motion_capture(home_trk(k), (uint32_t)(vp - home_trk(k)->p), *vp);   /* (LEVELS: that track's, as MIXER) */
-            ml_knob(home_trk(k), (uint32_t)(vp - home_trk(k)->p));
+#if FELUCCA_RDX
+            if (t->engine == ENGI_RDX && old != *vp && (id == P_VOICE || id == P_GLIDE))
+                rdx_voice_settings_set(t, (uint32_t)clamp(t->p[P_VOICE], 0, 2),
+                                       (uint32_t)clamp(t->p[P_GLIDE], 0, 127));
+#endif
+            motion_capture(t, id, *vp);                 /* (LEVELS: that track's, as MIXER) */
+            ml_knob(t, id);
         } else {
             edit_param(k, s);
         }

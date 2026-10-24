@@ -1114,13 +1114,24 @@ static void draw_columns(void)
         for (c = 0; c < 4u; c++) {
             int16_t *vp;
             const param_desc_t *d = home_param(c, &vp);
+            uint32_t icon = param_icon(d, *vp);
             param_format(d, *vp, val, &unit);
             card_mot_of(vp);
             card_span_of(d);
+#if FELUCCA_RDX
+            /* The user will supply dedicated artwork later.  Until then the
+             * redesigned controls retain the former MLVL/MRAT/FB icons. */
+            if (!home_levels() && TSEL->engine == ENGI_RDX) {
+                static const uint8_t RDX_HOME_ICON[4] = {
+                    ICON_MOD, ICON_RATIO, ICON_FEEDBACK, ICON_TRANSPOSE
+                };
+                icon = RDX_HOME_ICON[c];
+            }
+#endif
             if (home_levels())                         /* 1.5: T1..T4 LEVEL, the track's cushion, muted: DIM */
                 draw_column(c, "LEVEL", val, unit, trk[c].p[P_MUTE] ? T_DIM : VAL(c), RATIO(d, *vp), trk_icon(c, 1));
             else
-                draw_column(c, d->label, val, unit, VAL(c), RATIO(d, enum_rank(d, *vp)), param_icon(d, *vp));
+                draw_column(c, d->label, val, unit, VAL(c), RATIO(d, enum_rank(d, *vp)), icon);
         }
         return;
     }

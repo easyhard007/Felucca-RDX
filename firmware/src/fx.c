@@ -981,8 +981,10 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
     }
     }
 #if FELUCCA_RDX
-    if (t->engine == ENGI_RDX)
+    if (t->engine == ENGI_RDX) {
         rdx_fx_chain(t, b, n, nr);                      /* both native effect slots, strictly in patch order */
+        rdx_gain_apply(t, b, n);                        /* calibrated final RDX level, before track level/pan */
+    }
 #endif
     if (T_SPREAD(t))
         mix_spread(t, b, n SM_ARG(sm));

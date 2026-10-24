@@ -43,8 +43,8 @@ static const char *const N_CHRD[] = {"OFF", "DIA3", "DIA7", "MAJ", "MIN", "DOM7"
 static const char *const N_VOIC[] = {"CLOSE", "OPEN", "INV1", "INV2", "+OCT"};   /* VC_CLOSE .. VC_BASS */
 static const char *const N_VOICE[] = {"POLY", "MONO", "LEG", "UNI"};   /* V_POLY .. V_UNISON */
 #if FELUCCA_RDX
-static const char *const N_RDX_VOICE[] = {"POLY", "M-FULL", "M-LEG"};
-static const param_desc_t RDX_VOICE_DESC = {"VCE", F_ENUM, 0, 2, 0, N_RDX_VOICE, 0};
+static const char *const N_RDX_VOICE[] = {"Poly", "MonoFull", "MonoLeg."};
+static const param_desc_t RDX_VOICE_DESC = {"MODE", F_ENUM, 0, 2, 0, N_RDX_VOICE, 0};
 static const param_desc_t RDX_PORTA_DESC = {"PORTA", F_INT, 0, 127, 0, 0, 0};
 static const param_desc_t RDX_TRANS_DESC = {"Trans.", F_SEMI, -24, 24, 0, 0, 0};
 static const char *const N_RDX_GLOBAL[] = {"OFF", "TYPE1", "TYPE2"};
@@ -383,7 +383,7 @@ static int32_t param_turn(const param_desc_t *d, int32_t v, int32_t steps)
 
 static uint8_t fmt_named;        /* the last param_format was a name (F_ENUM, even "4"): ui_draw.c's digits do not roll it */
 
-/* value string (<= 5 chars) and unit for a parameter value */
+/* value string (normally <= 5 chars; RDX MODE keeps its full Reface wording) and unit for a parameter value */
 static void param_format(const param_desc_t *d, int32_t v, char *val, const char **unit)
 {
     *unit = "";
@@ -456,10 +456,17 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
             val[0] = '+';
             str_cpy(val + 1, t, 6);
         }
-        *unit = "st";
+        *unit = d->unit ? d->unit : "st";
         break;
     case F_ENUM:
-        str_cpy(val, d->names[v < d->min ? d->min : v > d->max ? d->max : v], 6);
+        {
+            uint32_t cap = 6;
+#if FELUCCA_RDX
+            if (d == &RDX_VOICE_DESC)
+                cap = 10;
+#endif
+            str_cpy(val, d->names[v < d->min ? d->min : v > d->max ? d->max : v], cap);
+        }
         if (d->unit)
             *unit = d->unit;
         break;

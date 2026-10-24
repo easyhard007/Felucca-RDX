@@ -774,16 +774,60 @@ EXPORT uint32_t web_test_rdx_restore_stale_slot(void)
 }
 EXPORT uint32_t web_test_engine_poly(void) { return ENG_RDX.poly; }
 EXPORT uint32_t web_test_rdx_home_knob4_is_transpose(void) { return ENG_RDX.knob[3] == P_TRANS; }
+EXPORT uint32_t web_test_rdx_home_layout(void)
+{
+    return ENG_RDX.knob[0] == P_VOICE && ENG_RDX.knob[1] == P_GLIDE &&
+           ENG_RDX.knob[2] == P_E2 && ENG_RDX.knob[3] == P_TRANS;
+}
 EXPORT uint32_t web_test_rdx_home_icon_is_transpose(void)
 {
     const param_desc_t *d = track_desc(&trk[0], ENG_RDX.knob[3]);
     return param_icon(d, trk[0].p[P_TRANS]) == ICON_TRANSPOSE;
 }
-EXPORT uint32_t web_test_rdx_home_label_byte(uint32_t unused, uint32_t i)
+EXPORT uint32_t web_test_rdx_home_label_byte(uint32_t knob, uint32_t i)
 {
-    const char *s = track_desc(&trk[0], ENG_RDX.knob[3])->label;
-    (void)unused;
+    const char *s = track_desc(&trk[0], ENG_RDX.knob[knob & 3u])->label;
     return i < str_len(s) ? (uint8_t)s[i] : 0u;
+}
+EXPORT uint32_t web_test_rdx_home_value_byte(uint32_t knob, uint32_t i)
+{
+    char value[12];
+    const char *unit;
+    uint32_t id = ENG_RDX.knob[knob & 3u];
+    param_format(track_desc(&trk[0], id), trk[0].p[id], value, &unit);
+    return i < str_len(value) ? (uint8_t)value[i] : 0u;
+}
+EXPORT void web_test_rdx_porta_set(uint32_t porta)
+{
+    trk[0].p[P_GLIDE] = (int16_t)clamp((int32_t)porta, 0, 127);
+    rdx_voice_settings_set(&trk[0], (uint32_t)clamp(trk[0].p[P_VOICE], 0, 2),
+                           (uint32_t)trk[0].p[P_GLIDE]);
+}
+EXPORT int32_t web_test_rdx_gain(void) { return trk[0].p[P_E2]; }
+EXPORT void web_test_rdx_gain_set(int32_t gain) { trk[0].p[P_E2] = (int16_t)clamp(gain, -24, 24); }
+EXPORT int32_t web_test_rdx_gain_sample(int32_t sample, int32_t gain)
+{
+    uint32_t q16 = RDX_MASTER_GAIN_Q16[clamp(gain, -24, 24) + 24];
+    return gain ? rdx_gain_sample(sample, q16) : sample;
+}
+EXPORT int32_t web_test_rdx_restore_gain(uint32_t p, int32_t gain, uint32_t current)
+{
+    web_test_rdx_preset(p);
+    project_capture(&proj_scratch);
+    proj_scratch.t[0].p[P_E2] = (int16_t)clamp(gain, -24, 24);
+    if (!current)
+        proj_scratch.t[0].p[P_ED_FX] = 0;       /* an autosave made before GAIN existed */
+    proj_scratch.sum = proj_sum(&proj_scratch);
+    return project_restore_runtime(&proj_scratch) ? 0x7FFFFFFF : trk[0].p[P_E2];
+}
+EXPORT int32_t web_test_rdx_restore_previous_gain(uint32_t p, int32_t gain)
+{
+    web_test_rdx_preset(p);
+    project_capture(&proj_scratch);
+    proj_scratch.t[0].p[P_E2] = (int16_t)clamp(gain, -24, 24);
+    proj_scratch.t[0].p[P_ED_FX] = 63;           /* 0.6.8/0.6.9 RMS calibration */
+    proj_scratch.sum = proj_sum(&proj_scratch);
+    return project_restore_runtime(&proj_scratch) ? 0x7FFFFFFF : trk[0].p[P_E2];
 }
 EXPORT uint32_t web_test_rdx_master_note(uint32_t note, int32_t trans, int32_t octave)
 {

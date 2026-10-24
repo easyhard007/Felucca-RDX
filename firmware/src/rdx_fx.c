@@ -689,6 +689,32 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         f->tail--;
 }
 
+/* Per-preset loudness calibration, measured after the complete stereo serial
+ * chain.  Keeping it here leaves the amount driving DIST/WAH unchanged.  A
+ * zero setting is bit-exact and free.  Split gains above unity into an integer
+ * and a Q16 fraction, keeping mulq16's coefficient below 1.0 as required by
+ * that helper.  Unlike the old pre-shifted Q12 multiply this preserves quiet
+ * samples and cannot turn a non-zero GAIN into a bit crusher. */
+static inline int32_t rdx_gain_sample(int32_t sample, uint32_t gain_q16)
+{
+    uint32_t whole = gain_q16 >> 16;
+    uint32_t fraction = gain_q16 & 0xFFFFu;
+    return sample * (int32_t)whole + mulq16(sample, fraction);
+}
+
+static void rdx_gain_apply(const track_t *t, int32_t *b, uint32_t n)
+{
+    int32_t db = clamp(t->p[P_E2], -24, 24);
+    uint32_t i, gain;
+    if (!db)
+        return;
+    gain = RDX_MASTER_GAIN_Q16[db + 24];
+    for (i = 0; i < n; i++) {
+        b[i] = rdx_gain_sample(b[i], gain);
+        rfx_work.side[i] = rdx_gain_sample(rfx_work.side[i], gain);
+    }
+}
+
 /* Reconstruct the serial chain's side signal after Part LEVEL.  Its mid has
  * already passed through the remaining mono track path in b. */
 static void rdx_fx_side_mix(const track_t *t, int32_t *l, int32_t *r, uint32_t n)

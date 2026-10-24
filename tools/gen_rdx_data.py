@@ -8,6 +8,7 @@ does not need C++, libm, or dynamic initialisation.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 from pathlib import Path
@@ -90,9 +91,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("reference", type=Path, help="components/rdx_reface directory")
     ap.add_argument("output", type=Path)
-    ap.add_argument("--selected", type=Path,
-                    default=Path(__file__).resolve().parents[1] / "assets/rdx/selected",
-                    help="directory containing the Selected .syx sound set")
+    ap.add_argument("--selected", type=Path, required=True,
+                    help="local directory containing the Selected .syx sound set (not distributed)")
+    ap.add_argument("--gain-calibration", type=Path,
+                    default=Path(__file__).resolve().parents[1] / "assets/rdx/gain-db.json",
+                    help="measured per-preset output gain calibration")
     args = ap.parse_args()
 
     const_text = (args.reference / "include/rdx_reface/dx_engine/RDX_Constants.h").read_text(encoding="utf-8")
@@ -130,6 +133,17 @@ def main() -> None:
     if len({name for name, _ in patches}) != len(patches):
         raise SystemExit("duplicate RDX voice name across Factory and Selected")
 
+    calibration_data = json.loads(args.gain_calibration.read_text(encoding="utf-8"))
+    calibration = {row["name"]: int(row["gainDb"]) for row in calibration_data["presets"]}
+    visible_names = {patches[i][0] for i in visible_index}
+    if set(calibration) != visible_names:
+        missing = sorted(visible_names - set(calibration))
+        extra = sorted(set(calibration) - visible_names)
+        raise SystemExit(f"gain calibration mismatch; missing={missing}, extra={extra}")
+    if any(v < -24 or v > 24 for v in calibration.values()):
+        raise SystemExit("gain calibration must stay in the -24..+24 dB range")
+    patch_gain_db = [calibration.get(name, 0) for name, _ in patches]
+
     gain = []
     for level in range(192):
         v = 0.0 if level == 0 else 10.0 ** (-((127 - level) * 48.0) / (20.0 * 127.0)) - 0.003981071705533
@@ -156,11 +170,12 @@ def main() -> None:
         for fine in range(128):
             hz = (10.0 ** coarse_group) * (9.772 ** (fine / 99.0))
             fixed_inc.append(min(0xFFFFFFFF, round(hz / 44100.0 * (1 << 32))))
+    master_gain_q16 = [round((10.0 ** (db / 20.0)) * 65536.0) for db in range(-24, 25)]
 
     out = [
         "/* SPDX-License-Identifier: GPL-3.0-or-later\n",
         " * Generated from the CoreS3 RDX_new/PicoFaceDX-derived implementation\n",
-        " * and user-provided Yamaha reface DX SysEx sound dumps.  Do not hand-edit. */\n",
+        " * and locally supplied Yamaha reface DX patch data.  Do not hand-edit. */\n",
         "#ifndef FELUCCA_RDX_DATA_H\n#define FELUCCA_RDX_DATA_H\n#include <stdint.h>\n\n",
         f"#define RDX_FACTORY_COUNT {len(factory_index)}u\n",
         f"#define RDX_SELECTED_COUNT {len(selected)}u\n",
@@ -180,6 +195,10 @@ def main() -> None:
     for i in range(len(patches)):
         out.append(f"    X({i})" + (" \\\n" if i + 1 < len(patches) else "\n"))
     out.append("\n")
+    out.append("#define RDX_FOR_EACH_PATCH_GAIN(X) \\\n")
+    for i, gain_db in enumerate(patch_gain_db):
+        out.append(f"    X({i}, {gain_db})" + (" \\\n" if i + 1 < len(patches) else "\n"))
+    out.append("\n")
     out.append("#define RDX_FOR_EACH_PRESET(X) \\\n")
     for at, i in enumerate(visible_index):
         out.append(f"    X({i})" + (" \\\n" if at + 1 < len(visible_index) else "\n"))
@@ -193,6 +212,8 @@ def main() -> None:
     out.append('    {"Factory", RDX_SET_FACTORY, RDX_FACTORY_COUNT},\n')
     out.append('    {"Selected", RDX_SET_SELECTED, RDX_SELECTED_COUNT}\n};\n\n')
     out.append(c_array("RDX_GAIN_Q15", "uint32_t", gain))
+    out.append(c_array("RDX_PRESET_GAIN_DB", "int8_t", patch_gain_db))
+    out.append(c_array("RDX_MASTER_GAIN_Q16", "uint32_t", master_gain_q16))
     out.append(c_array("RDX_ENV_TARGET_Q16", "uint32_t", env_target))
     out.append(c_array("RDX_ATTACK_STEP_Q16", "uint32_t", attack_step))
     out.append(c_array("RDX_DECAY_STEP_Q16", "uint16_t", decay_step))
