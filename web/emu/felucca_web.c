@@ -627,6 +627,10 @@ EXPORT uint32_t web_test_rdx_reverb_time(uint32_t slot)
     return slot < 2u && (p->common.effects[slot][0] & 7u) == RFX_REVERB ?
            p->common.effects[slot][2] & 127u : 0u;
 }
+EXPORT uint32_t web_test_rdx_reverb_model(uint32_t slot)
+{
+    return slot < 2u ? (uint32_t)(uint16_t)rdx_fx_values(&trk[0], slot)[0] : 0xFFFFFFFFu;
+}
 EXPORT uint32_t web_test_rdx_reverb_mapped_size(uint32_t slot)
 {
     const rdx_patch_t *p = rdx_track_get(0);

@@ -876,6 +876,7 @@ static __attribute__((noinline)) void track_insert(track_t *t, int32_t *b, uint3
     t->ins_run = s->w != 0;                             /* (mix_part calls again while it fades) */
 }
 
+#include "rdx_clouds.c"                               /* fixed-point Clouds reverb, two independent RDX slots */
 #include "rdx_fx.c"                                    /* Reface FX1 -> FX2 serial insert */
 
 /* one block of the whole mix (shared with hostsim.c): events -> each part (with its modulation matrix)

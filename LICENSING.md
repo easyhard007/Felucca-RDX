@@ -16,9 +16,9 @@ Every file in this tree that carries an `SPDX-License-Identifier: GPL-3.0-only` 
 - the web pages (installer, editor, the browser emulator `web/emu/`) and their tests: `web/` (not the Fukiai and DotGothic16 fonts, below)
 - the host tests: `tests/`
 
-Three source files are ports and keep the licence of their originals:
-`firmware/src/phys_dsp.c` (DaisySP, MIT), `firmware/src/phys_symp.c` (Rings, MIT) and
-`firmware/src/fm6_core.c` (msfa, Apache-2.0). The firmware built with them is GPL-3.0-only as
+Four source files are ports and keep the licence of their originals:
+`firmware/src/phys_dsp.c` (DaisySP, MIT), `firmware/src/phys_symp.c` (Rings, MIT),
+`firmware/src/rdx_clouds.c` (Clouds, MIT), and `firmware/src/fm6_core.c` (msfa, Apache-2.0). The firmware built with them is GPL-3.0-only as
 a whole.
 
 Five engines and the code they share are under the MIT licence, not the GPL. They are
@@ -58,6 +58,7 @@ All by Hügelton Instruments (Leo Kuroshita), in this tree:
 | Instrument samples (Versilian Studios VSCO-2 Community Edition, VCSL): the SAMPLE sets, also the SLICE engine's PIANO (the PIANO set's middle C) | CC0 1.0 | `assets/samples-cc0/`, provenance in `ATTRIBUTION.txt` there |
 | DaisySP by Electrosmith, Corp and Emilie Gillet (<https://github.com/electro-smith/DaisySP>): the PHYS engine's modal and string models and the resonator, ported to fixed point | MIT | `firmware/src/phys_dsp.c`, `LICENSES/MIT-DaisySP.txt` |
 | Rings by Emilie Gillet (<https://github.com/pichenettes/eurorack>): the PHYS engine's sympathetic strings, ported to fixed point | MIT | `firmware/src/phys_symp.c`, `LICENSES/MIT-Rings.txt` |
+| Clouds by Emilie Gillet (<https://github.com/pichenettes/eurorack/tree/master/clouds>): the RDX serial reverb's Griesinger/Dattorro topology and compressed shared-delay design, ported to fixed-point C at 22.05 kHz | MIT | `firmware/src/rdx_clouds.c`, `LICENSES/MIT-Clouds.txt` |
 | msfa by Google Inc. and Pascal Gauthier, from Dexed (<https://github.com/asb2m10/dexed>): the FM6 engine's synthesis, ported to integer C (Dexed itself is GPL-3.0; only msfa is used; the FM6 factory patches are Felucca's own) | Apache-2.0 | `firmware/src/fm6_core.c`, `LICENSES/Apache-2.0-msfa.txt` |
 | RDX_new / PicoFaceDX-derived Reface DX implementation and factory-patch conversion by Michi71: patch format, envelope and operator behaviour, frequency rules, algorithms and 35 source factory-patch records (32 visible, 3 retained only as compatibility slots); ported here to fixed-point C for AC79 | GPL-3.0-or-later (distributed with this GPLv3 firmware under GPLv3) | `firmware/src/eng_rdx.c`, `firmware/src/felucca_rdx_data.h`, `tools/gen_rdx_data.py` |
 | 21 locally supplied reface DX patch records in the `Selected` sound set | User-supplied patch parameter data; no upstream project licence asserted. The source `.syx` containers are not kept in the current source tree; only the generated fixed-size records compiled into the firmware are present. | `firmware/src/felucca_rdx_data.h` |

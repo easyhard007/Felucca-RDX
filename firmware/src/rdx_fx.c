@@ -8,7 +8,9 @@
  * 65536-sample line.  A Reface DX is monotimbral, so one sounding RDX Part owns
  * that line at a time; this preserves the full 1.486 s range and the serial
  * FX1 -> FX2 position without the dull FS / 8 approximation.  Chorus and HALL
- * also keep Felucca's native kernels.  The chain itself is stereo: the mono FM
+ * also keep Felucca's native kernels; CLOUDS uses a fixed-point port of the
+ * original Clouds Dattorro/Griesinger topology.  The chain itself is stereo:
+ * the mono FM
  * mix is duplicated at its input, every slot receives both channels from the
  * preceding slot, and HALL's native mid/side return is reconstructed before
  * FX2 instead of discarding its width there. */
@@ -446,6 +448,7 @@ static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32
         int32_t mid = (l[i] >> 1) + (r[i] >> 1);
         rfx_work.in[i] = mulq15(clamp(mid, -xmax, xmax), send);
         rfx_work.wet[i] = 0;
+        rfx_work.side[i] = 0;
     }
     h->side = 0;
     if (s->p1 == 0u)
@@ -453,12 +456,18 @@ static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32
     else if (s->p1 == 1u)
         rfx_rev_spring(s, rfx_work.in, rfx_work.wet, n, comb,
                        slot ? rdx_rev_u2.sp : rev_u.sp, size, damp);
-    else
+    else if (s->p1 == 2u)
         rev_hall_core(rfx_work.in, rfx_work.wet, n, comb, ap, h, size, damp, h->sd);
+    else
+        rdx_clouds_process(slot, rfx_work.in, rfx_work.wet, rfx_work.side,
+                           n, s->p3, s->p4);
     rdx_rev_size = (uint8_t)size;
     for (i = 0; i < n; i++) {
-        int32_t wet = mulq15(rfx_work.wet[i], (int32_t)s->p2 * 258);
-        int32_t side = h->side ? mulq15(h->sd[i], (int32_t)s->p2 * 258) : 0;
+        int32_t amount = (int32_t)s->p2 * 258;
+        int32_t wet = s->p1 == 3u ? rdx_cld_mul(rfx_work.wet[i], amount) :
+                                    mulq15(rfx_work.wet[i], amount);
+        int32_t side = s->p1 == 3u ? rdx_cld_mul(rfx_work.side[i], amount) :
+                       h->side ? mulq15(h->sd[i], amount) : 0;
         l[i] += wet + side;
         r[i] += wet - side;
     }
@@ -627,11 +636,14 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         uint32_t p4 = (uint32_t)clamp(pv[3], 0, 127);
         uint32_t si = rfx_slot_index(t, k);
         rdx_fx_slot_t *s = &f->slot[k];
+        uint32_t old_cloud = s->valid && s->type == RFX_REVERB && s->p1 == 3u;
         uint32_t model = ty == RFX_PHASER ? rdx_phaser_model_get() :
                          ty == RFX_FLANGER ? rdx_flanger_model_get() : 0u;
         uint32_t changed = rfx_slot_set(s, ty, send, p1, p2, p3, p4, model);
-        if (changed)
-            rfx_hall_clear(k);                          /* no old-patch HALL tail in this physical slot */
+        if (changed && ty == RFX_REVERB && p1 < 3u)
+            rfx_hall_clear(k);                          /* no old native-reverb tail in this physical slot */
+        if (changed && (old_cloud || (ty == RFX_REVERB && p1 == 3u)))
+            rdx_clouds_clear(k);                        /* CLOUDS owns a separate tail for each physical slot */
         if (!send || ty == RFX_THRU)
             continue;
         if (ty >= RFX_DIST && ty <= RFX_PHASER && ty != RFX_CHORUS) {

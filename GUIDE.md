@@ -119,7 +119,7 @@ RDX 使用串行立体声 `FX1 -> FX2` 链。Phaser 和 Flanger 可在 `AUDIO` �
 `TYPE / SEND / TYPE / SEND`。名称与数值均使用小号字体，RDX 效果名称最多显示 6 个字符。TYPE 为
 `THRU` 时 SEND 显示 `-` 且旋钮不响应；对应的详情页用一张整行说明卡片代替四个空参数卡片。
 
-Reverb 可调 `TYPE / DEPTH / TIME / DAMP`，Delay 可调 `DEPTH / TIME / FDBK / COLOR`。音色首次载入时，发送量按原有 RDX 映射生成：Chorus 为 20，Delay 由原 Depth 映射，Reverb 为原 Depth 除以 3。用户修改后的参数会随工程和用户音色保存。
+Reverb 可调 `TYPE / DEPTH / TIME / DAMP`，类型包括 `ROOM / SPRING / HALL / CLOUDS`。`CLOUDS` 是 Mutable Instruments Clouds 混响拓扑的 22.05 kHz 定点立体声移植，每个串行槽拥有独立尾音；本测试版本中，Factory、Selected 和新导入的 SysEx 音色只要包含 Reverb，默认类型均为 `CLOUDS`。Delay 可调 `DEPTH / TIME / FDBK / COLOR`。音色首次载入时，发送量按原有 RDX 映射生成：Chorus 为 20，Delay 由原 Depth 映射，Reverb 为原 Depth 除以 3。用户修改后的参数会随工程和用户音色保存。
 
 ## 性能诊断
 

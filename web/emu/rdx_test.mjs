@@ -206,9 +206,10 @@ check(`an old autosave PATCH mismatch reloads the current LegendEP data (0x${res
 d.ex.web_test_rdx_preset(0);                          // DigiChord: FLANGER -> REVERB 59, 20
 check("RDX Reverb Depth 59 maps to Felucca send 19",
       d.ex.web_test_rdx_reverb_send(1) === 19);
-check("RDX Reverb keeps the requested TIME and fixed Felucca DAMP 60",
+check("RDX Reverb defaults to CLOUDS while keeping TIME and DAMP 60",
+      d.ex.web_test_rdx_reverb_model(1) === 3 &&
       d.ex.web_test_rdx_reverb_time(1) === 20 && d.ex.web_test_rdx_reverb_damp() === 60);
-check("RDX Reverb TIME is stretched by 1.5 for Felucca HALL SIZE",
+check("RDX Reverb retains the 1.5x native-reverb TIME fallback mapping",
       d.ex.web_test_rdx_reverb_mapped_size(1) === 30);
 check("RDX Delay DEPTH 50 maps to Felucca SEND 30 / FDBK 60",
       d.ex.web_test_rdx_delay_send(50) === 30 &&
@@ -233,7 +234,7 @@ check("RDX Distortion level is unity at 0, gently raised at 5, and +30% at 100",
       d.ex.web_test_rdx_dist_target_q16(127) === 85197);
 d.ex.web_midi(0x90, 60, 100);
 d.renderFrames(128);
-check("a sounding RDX patch applies the stretched TIME to native HALL SIZE",
+check("a sounding RDX patch publishes the native-reverb fallback SIZE diagnostic",
       d.ex.web_test_rdx_reverb_size() === 30);
 d.ex.web_midi(0x80, 60, 0);
 d.render(1200);
@@ -322,13 +323,13 @@ fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
 check("RDX Phaser's PicoFace short-delay stage produces a stereo output",
       sideEnergy(rdxPhaser) > 0.01);
 
-fxab.ex.web_test_rdx_fx_set(0, 7, 90, 80);             // Hall -> clean Distortion
+fxab.ex.web_test_rdx_fx_set(0, 7, 90, 80);             // Clouds -> clean Distortion
 fxab.ex.web_test_rdx_fx_set(1, 1, 0, 64);
 fxab.ex.web_midi(0x90, 60, 100);
-const hallThroughFx2 = fxab.renderFrames(128 * 40, true);
+const cloudsThroughFx2 = fxab.renderFrames(128 * 40, true);
 fxab.ex.web_midi(0x80, 60, 0); fxab.render(1800);
-check("Hall stereo return passes through FX2 without collapsing to mono",
-      sideEnergy(hallThroughFx2) > 0.01);
+check("Clouds stereo return passes through FX2 without collapsing to mono",
+      sideEnergy(cloudsThroughFx2) > 0.01);
 
 d.ex.web_test_rdx_preset(0);
 held.ex.web_test_rdx_preset(0);

@@ -264,7 +264,9 @@ static uint32_t rdx_fx_default_send(uint32_t type, uint32_t depth)
 
 /* Fill the four live controls from the three bytes in a Reface patch.  The
  * extra controls expose values that were fixed in the first RDX firmware:
- * Delay feedback / colour and Reverb model / damping. */
+ * Delay feedback / colour and Reverb model / damping.  Reface SysEx has no
+ * reverb-algorithm byte, so newly loaded factory, Selected and imported voices
+ * deliberately default to CLOUDS for this RDX test release. */
 static void rdx_fx_slot_defaults(track_t *t, uint32_t slot, uint32_t type,
                                  uint32_t p1, uint32_t p2)
 {
@@ -290,7 +292,7 @@ static void rdx_fx_slot_defaults(track_t *t, uint32_t slot, uint32_t type,
         v[2] = (int16_t)(fb > 120u ? 120u : fb); v[3] = 70;
         break;
     case RFX_REVERB:
-        v[0] = 2; v[1] = 127; v[2] = (int16_t)p2; v[3] = 60;
+        v[0] = 3; v[1] = 127; v[2] = (int16_t)p2; v[3] = 60;
         break;
     default: break;
     }
