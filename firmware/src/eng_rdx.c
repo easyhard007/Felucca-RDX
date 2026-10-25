@@ -8,7 +8,7 @@
  * Phase and modulation use Q0.32, audio Q1.15, envelope levels Q16.16. */
 #include "felucca_rdx_data.h"
 
-#define RDX_POLY NVOICE
+#define RDX_POLY 8u
 
 enum {
     RFX_THRU, RFX_DIST, RFX_WAH, RFX_CHORUS,
@@ -19,10 +19,6 @@ static const char *const RDX_FX_NAMES[RFX_N] = {
 };
 #define RDX_FX_MARK 126
 #define RDX_GAIN_MARK 62                         /* P_ED_FX: distinct from 0.6.8/0.6.9's marker 63 */
-/* F_PCT values are stored as a share of 127.  These raw values display as
- * exactly 15% and 45% after params.c's rounded percentage conversion. */
-#define RDX_REVERB_HALL_DAMP 19
-#define RDX_REVERB_CLOUDS_DAMP 57
 
 typedef struct __attribute__((packed)) {
     uint8_t voice_name[10], reserved1[2], transpose, mono_poly, porta_time, pb_range;
@@ -296,7 +292,7 @@ static void rdx_fx_slot_defaults(track_t *t, uint32_t slot, uint32_t type,
         v[2] = (int16_t)(fb > 120u ? 120u : fb); v[3] = 70;
         break;
     case RFX_REVERB:
-        v[0] = 3; v[1] = 127; v[2] = (int16_t)p2; v[3] = RDX_REVERB_CLOUDS_DAMP;
+        v[0] = 3; v[1] = 127; v[2] = (int16_t)p2; v[3] = 60;
         break;
     default: break;
     }
@@ -321,28 +317,6 @@ static void rdx_fx_type_changed(track_t *t, uint32_t slot, uint32_t type)
     if (type == RFX_CHORUS) p2 = 40u;
     if (type == RFX_REVERB) p2 = 60u;
     rdx_fx_slot_defaults(t, slot, type, p1, p2);
-}
-
-/* Reface SysEx has no reverb-model byte, but the RDX detail page exposes the
- * four local models.  Switching between the two comparison targets applies
- * a model-appropriate damping baseline without disturbing DEPTH, TIME or the
- * slot SEND.  Return the changed parameter id so the editor shadow can follow
- * the automatic companion change. */
-static uint32_t rdx_reverb_model_changed(track_t *t, uint32_t slot, uint32_t model)
-{
-    uint32_t damp_id;
-    int16_t damp;
-    if (slot >= 2u || rdx_fx_type_of(t, slot) != RFX_REVERB)
-        return P_COUNT;
-    if (model == 2u)
-        damp = RDX_REVERB_HALL_DAMP;
-    else if (model == 3u)
-        damp = RDX_REVERB_CLOUDS_DAMP;
-    else
-        return P_COUNT;
-    damp_id = slot ? P_RFX2_D : P_IC;
-    t->p[damp_id] = damp;
-    return damp_id;
 }
 
 static const rdx_patch_t *rdx_track_get(uint32_t tr)

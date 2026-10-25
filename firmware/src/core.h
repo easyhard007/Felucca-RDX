@@ -4,11 +4,7 @@
 #include <stdint.h>
 
 /* ------------------------------------------------------------ sizes --- */
-#if FELUCCA_RDX
-#define NVOICE 10                /* temporary RDX stress-test budget: ten voices in the single Part */
-#else
-#define NVOICE 8                 /* upstream voices per part, and the budget shared by all parts */
-#endif
+#define NVOICE 8                 /* voices per part, and the budget shared by all parts */
 #if FELUCCA_RDX
 #define NPART 1                  /* RDX is a monotimbral instrument: one sound, one part */
 #else
@@ -32,7 +28,7 @@
 #define FELUCCA_FM6_ONLY 0       /* src/felucca.c: FM6-only RDX migration baseline */
 #endif
 #ifndef FELUCCA_RDX
-#define FELUCCA_RDX 0            /* fixed-point Reface DX engine in persistent slot 12 */
+#define FELUCCA_RDX 0            /* fixed-point, eight-voice Reface DX engine in persistent slot 12 */
 #endif
 #if FELUCCA_RDX
 #undef FELUCCA_FM6_ONLY
@@ -333,12 +329,9 @@ typedef struct track {
     uint8_t lfo_wrap;            /* the LFO's phase wrapped this block: its S&H is drawn after the parts (voice.c) */
     uint32_t esync_k[3];         /* ATK's step, DEC's and REL's coefficient (Q16) this block (voice.c esync_coef) */
     uint8_t spread_on;           /* SPREAD this block (fx.c mix_part, voice.c track_render) */
-    /* Two extra RDX voice_t records add 168 bytes (8 modulo 16).  Extend only
-     * the RDX pad so both the stress build and upstream eight-voice build keep
-     * the target's cheap 16-byte-multiple track indexing. */
-    uint8_t rsv_sz[FELUCCA_RDX ? 17 : 9];
+    uint8_t rsv_sz[9];           /* (sizeof(track_t) a multiple of 16: below) */
 #else
-    uint8_t rsv_sz[FELUCCA_RDX ? 14 : 6];
+    uint8_t rsv_sz[6];           /* (sizeof(track_t) a multiple of 16: below) */
 #endif
     int16_t armp, aholdp;        /* P_AMODE / P_AHOLD as last seen by the ISR */
     /* engine switch (voice.c engine_block): the old engine's voices fade out, then it switches */
