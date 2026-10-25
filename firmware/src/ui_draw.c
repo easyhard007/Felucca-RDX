@@ -3,7 +3,7 @@
 /* Felucca UI drawing: the header, the four knob cards, the footer (steps + engine / preset / page)
  * and the frame; the panel between the cards and the footer is ui_graph.c. The layout:
  * flat SURF cards and panels on BG,
- * rounded corners, no rules (MENU > STYLE LINE: no SURF, 1 px rules between the areas instead: draw_gaps), colours from the theme tokens only (gfx.c T_*).
+ * rounded corners, no rules (MENU > STYLE LINE: no SURF, 1 px rules between the areas instead: draw_gaps), colours from the theme tokens (gfx.c T_*), except the RDX OP-envelope identity colours.
  * Type, by role: M (15 px) what is read: values, titles, messages, every list's rows, the
  * selected item's detail; S (12 px) what describes it: labels, units, key hints (a keycap's word), the footer, map
  * and layer cells, graph annotations, document text; L (28 px) the one big readout of a screen. Where M cannot fit
@@ -520,6 +520,9 @@ static void draw_frame(void)
  * before a draw_column of a track parameter (card_mot_of) and taken by it; card_mot: the cards drawn with it. */
 static uint32_t card_mot_mask[(P_COUNT + 31u) / 32u];
 static uint8_t card_mot_next, card_mot;
+/* A graph may assign a semantic identity colour to its next card label (RDX
+ * OP envelopes).  Zero keeps the regular palette/hot-knob colour. */
+static uint16_t card_label_next;
 static void card_mot_of(const int16_t *vp)
 {
     uintptr_t id = ((uintptr_t)vp - (uintptr_t)TSEL->p) / sizeof *vp;   /* (not the track's: huge) */
@@ -703,7 +706,7 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
     int hot = c == ui.hot_col && ui.hot_t, named = fmt_named, mot = card_mot_next && label[0], strip, snap;
     uint32_t kind = large_kind();                       /* MENU > LARGE: tall (draw_column_tall), or the label in M */
     uint8_t sig;
-    uint16_t lc = hot ? T_ACCENT : T_MID;
+    uint16_t lc = card_label_next ? card_label_next : hot ? T_ACCENT : T_MID;
     int32_t x, lx = 5, uw, room = COL_W - 8;
     const aafont_t *vf = &AF_M;
     uint32_t n, kn;
@@ -712,6 +715,7 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
     card_span.fn = 0;
     fmt_named = 0;                                      /* (params.c: a name, for this card only) */
     card_mot_next = 0;                                  /* (the same: MOTION, this card only) */
+    card_label_next = 0;
     card_mot = (uint8_t)((card_mot & ~(1u << c)) | (uint32_t)mot << c);
     if (str_eq(unit, label))
         unit = "";                                      /* "BPM 124 BPM", "USB OFF USB": the label says it */
@@ -732,7 +736,11 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
                                                         * drawn: gw; ratio / 20 missed a pixel inside a step, #63 soak) */
     key[n + 5] = (char)(icon == ICON_NONE ? '~' : '!' + icon % 90u);
     key[n + 6] = (char)('0' + hot + 2 * mot + 4 * (int)kind);
-    key[n + 7] = 0;
+    key[n + 7] = (char)('A' + (lc & 15u));
+    key[n + 8] = (char)('A' + ((lc >> 4) & 15u));
+    key[n + 9] = (char)('A' + ((lc >> 8) & 15u));
+    key[n + 10] = (char)('A' + (lc >> 12));
+    key[n + 11] = 0;
     uw = unit[0] ? text_w(&AF_S, unit) + 3 : 0;
     if (text_w(vf, val) + uw > room) {
         vf = &AF_S;
@@ -1150,6 +1158,7 @@ static void draw_columns(void)
             int32_t r;
             uint32_t ic;
             int on = rdx_ui_card(c, &lb, val, &u, &r, &ic);
+            if (cur_page()->graph == GR_RDX_EG) card_label_next = rdx_ui_op_colour(c);
             draw_column(c, lb, val, u, on ? VAL(c) : T_DIM, r, ic);
         }
         return;

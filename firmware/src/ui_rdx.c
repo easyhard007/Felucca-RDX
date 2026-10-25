@@ -6,6 +6,17 @@ static int32_t accel(uint32_t role, int32_t s, int32_t range);
 
 static uint8_t rdx_eg_row, rdx_ksc_row, rdx_mod_row, rdx_lvl_row, rdx_freq_row;
 
+/* OP envelope identity colours stay fixed across display palettes.  The RDX
+ * editor needs four traces to remain distinguishable even in a monochrome
+ * theme; these colours are also used by the OP1..OP4 card labels. */
+static uint16_t rdx_ui_op_colour(uint32_t op)
+{
+    static const uint16_t C[4] = {
+        RGB(240, 68, 68), RGB(174, 88, 255), RGB(0, 190, 220), RGB(240, 180, 24)
+    };
+    return C[op & 3u];
+}
+
 static int rdx_ui_page(uint32_t g)
 {
     return g >= GR_RDX_ALG && g <= GR_RDX_LFO;
@@ -264,55 +275,107 @@ static void rdx_ui_graph_matrix(uint32_t g)
 
 static void rdx_ui_graph_algorithm(void)
 {
+    /* Node placement follows the compact reface DX diagrams used by
+     * DXcompanion: carriers form the square lower row, modulators are round
+     * and may sit on the upper or middle row.  Coordinates are adapted to the
+     * FM-1's 220 x 100 graph area. */
+    static const uint8_t X[12][4] = {
+        {47, 96,145,194}, {47, 96,145,194}, {47,110,159,194},
+        {47, 96,145,194}, {47, 80,131,182}, {47, 96,145,194},
+        {47, 96,145,194}, {47, 96,145,194}, {47, 96,145,194},
+        {47, 96,145,194}, {47, 96,145,194}, {47, 96,145,194}
+    };
+    static const uint8_t Y[12][4] = {
+        {73,27,27,27}, {73,73,73,27}, {73,27,27,73},
+        {73,27,52,27}, {73,27,48,73}, {73,73,27,27},
+        {73,73,27,27}, {73,27,73,27}, {73,73,73,27},
+        {73,73,73,27}, {73,73,73,27}, {73,73,73,73}
+    };
     rdx_patch_t p;
-    uint32_t alg, src, dst, pass;
-    int32_t x[4] = {36, 92, 148, 204}, y[4] = {72,72,72,72};
-    uint8_t depth[4] = {0,0,0,0};
+    uint32_t alg, src, dst, carriers, first = 4u, last = 0u;
     char n[2] = {'1',0}, a[16] = "ALGORITHM ";
     rdx_patch_for_track(song.sel, &p); alg = p.common.algorithm % 12u;
-    for (pass = 0; pass < 4u; pass++)
-        for (src = 0; src < 4u; src++)
-            for (dst = 0; dst < 4u; dst++)
-                if ((RDX_ROUTES[alg][src] >> dst) & 1u)
-                    if (depth[src] <= depth[dst]) depth[src] = (uint8_t)(depth[dst] + 1u);
-    for (src = 0; src < 4u; src++) y[src] -= depth[src] * 22;
+
+    /* Draw routes before nodes.  A right-to-left horizontal run followed by a
+     * vertical drop gives the same readable elbows as the reference SVGs. */
     for (src = 0; src < 4u; src++)
         for (dst = 0; dst < 4u; dst++)
-            if ((RDX_ROUTES[alg][src] >> dst) & 1u)
-                cv_line_t(x[src], y[src] + 12, x[dst], y[dst],
-                          p.op[src].enable && p.op[dst].enable ? T_THEME : T_DIM, 2);
+            if ((RDX_ROUTES[alg][src] >> dst) & 1u) {
+                int32_t sx = X[alg][src], sy = Y[alg][src];
+                int32_t dx = X[alg][dst], dy = Y[alg][dst];
+                uint16_t c = p.op[src].enable && p.op[dst].enable ? T_THEME : T_DIM;
+                if (sy == dy)
+                    cv_line_t(sx - 11, sy, dx + 11, dy, c, 2);
+                else {
+                    cv_line_t(sx - 11, sy, dx, sy, c, 2);
+                    cv_line_t(dx, sy, dx, dy - 11, c, 2);
+                }
+            }
+
+    /* Every carrier joins the output bus. */
+    carriers = RDX_CARRIERS[alg];
+    for (src = 0; src < 4u; src++)
+        if ((carriers >> src) & 1u) {
+            uint16_t c = p.op[src].enable ? T_THEME : T_DIM;
+            cv_line_t(X[alg][src], Y[alg][src] + 11, X[alg][src], 91, c, 2);
+            if (first == 4u) first = src;
+            last = src;
+        }
+    if (first < 4u) {
+        uint16_t c = p.op[first].enable ? T_THEME : T_DIM;
+        if (last != first) cv_line_t(X[alg][first], 91, X[alg][last], 91, c, 2);
+        cv_line_t(X[alg][first], 91, X[alg][first], 98, c, 2);
+    }
+
     for (src = 0; src < 4u; src++) {
-        uint16_t c = p.op[src].enable ? ((RDX_CARRIERS[alg] >> src) & 1u ? T_ACCENT : T_THEME) : T_DIM;
-        if ((RDX_CARRIERS[alg] >> src) & 1u) cv_line_t(x[src], y[src] + 18, x[src], 91, c, 2);
-        cv_rrect(x[src] - 11, y[src], 22, 18, 4, c, T_SURF);
+        uint16_t c = p.op[src].enable ? T_THEME : T_DIM;
+        int carrier = (carriers >> src) & 1u;
+        if (carrier)
+            cv_rect((int32_t)X[alg][src] - 11, (int32_t)Y[alg][src] - 11, 22, 22, c);
+        else
+            cv_rrect((int32_t)X[alg][src] - 11, (int32_t)Y[alg][src] - 11, 22, 22, -11, c, T_SURF);
         n[0] = (char)('1' + src);
-        cv_text_in(x[src] - 11, y[src] + 3, 22, &AF_S, n, p.op[src].enable ? T_INK : T_SURF, c);
+        cv_text_in((int32_t)X[alg][src] - 11, (int32_t)Y[alg][src] - 7, 22,
+                   &AF_S, n, p.op[src].enable ? T_INK : T_SURF, c);
     }
     fmt_int(a + 10, (int32_t)alg + 1);
-    cv_text_on(12, 96, &AF_S, a, T_MID, T_SURF);
+    cv_text_on(12, 102, &AF_S, a, T_MID, T_SURF);
 }
 
 static void rdx_ui_graph_env(uint32_t pitch)
 {
-    uint16_t col[4] = {T_THEME,T_ACCENT,T_TEXT,T_MID};
     rdx_patch_t p;
-    uint32_t op, st;
+    uint32_t pass, op, st, selected = (rdx_eg_row >> 1) & 3u;
+    const int32_t x0 = 12, width = 216, top = 8, bottom = 88;
     rdx_patch_for_track(song.sel, &p);
-    cv_line(12, 88, 216, 88, T_RAISE);
-    for (op = 0; op < (pitch ? 1u : 4u); op++) {
-        int32_t px = 12, py = pitch ? 50 : 88;
-        uint16_t c = pitch ? T_THEME : col[op];
+    cv_line(x0, bottom, x0 + width, bottom, T_RAISE);
+    if (pitch) cv_line(x0, (top + bottom) / 2, x0 + width, (top + bottom) / 2, T_RAISE);
+
+    /* Four equal horizontal quarters: RATE n moves node n only inside its own
+     * quarter.  Consequently RATE 4 alone sets the total width from 75 to
+     * 100 percent, while the earlier rates change only their relative nodes. */
+    for (pass = 0; pass < (pitch ? 1u : 2u); pass++)
+      for (op = 0; op < (pitch ? 1u : 4u); op++) {
+        int32_t px = x0, py = pitch ? (top + bottom) / 2 : bottom;
+        uint16_t c;
+        if (!pitch && ((pass == 0u && op == selected) || (pass == 1u && op != selected))) continue;
+        c = pitch ? T_THEME : p.op[op].enable ? rdx_ui_op_colour(op) : T_DIM;
         for (st = 0; st < 4u; st++) {
             uint32_t rate = pitch ? p.common.peg_rate[st] : p.op[op].eg_rate[st];
-            int32_t level = pitch ? (int32_t)p.common.peg_level[st] - 16 : p.op[op].eg_level[st];
-            int32_t nx = px + 18 + (127 - (int32_t)rate) * 27 / 127;
-            int32_t ny = pitch ? 84 - level * 68 / 96 : 88 - level * 70 / 127;
-            if (nx > 222) nx = 222;
-            cv_line_t(px, py, nx, ny, c, op == (rdx_eg_row >> 1) || pitch ? 2 : 1);
+            int32_t level = pitch ? (int32_t)p.common.peg_level[st] - 64 : p.op[op].eg_level[st];
+            int32_t nx = x0 + (int32_t)st * width / 4 + (127 - (int32_t)rate) * width / (4 * 127);
+            int32_t ny = pitch ? (top + bottom) / 2 - level * (bottom - top) / 96
+                               : bottom - level * (bottom - top) / 127;
+            int32_t r = pitch || op == selected ? 4 : 3;
+            if (ny < top) ny = top;
+            if (ny > bottom) ny = bottom;
+            cv_line_t(px, py, nx, ny, c, pitch || op == selected ? 2 : 1);
+            cv_rrect(nx - r, ny - r, r * 2 + 1, r * 2 + 1, -(r + 1), c, T_SURF);
             px = nx; py = ny;
         }
-    }
-    cv_text_on(12, 96, &AF_S, pitch ? "PITCH ENVELOPE" : rdx_ui_row_name(GR_RDX_EG, rdx_eg_row), T_MID, T_SURF);
+      }
+    cv_text_on(12, 100, &AF_S, pitch ? "PITCH ENVELOPE" : rdx_ui_row_name(GR_RDX_EG, rdx_eg_row),
+               pitch ? T_MID : rdx_ui_op_colour(selected), T_SURF);
 }
 
 static void rdx_ui_graph_lfo(void)
