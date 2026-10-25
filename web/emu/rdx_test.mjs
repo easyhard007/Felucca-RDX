@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // RDX regression: every imported factory voice sounds and releases, the engine
-// never allocates more than eight voices, and a forced stop fades for 256 samples.
+// never allocates more than ten voices, and a forced stop fades for 256 samples.
 import fs from "fs";
 
 const bytes = fs.readFileSync(process.argv[2] || "build/emu/felucca.wasm");
@@ -51,7 +51,7 @@ const d = await boot();
 const held = await boot();
 const effected = await boot();
 const fxab = await boot();
-check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
+check("engine reports a ten-voice stress-test limit", d.ex.web_test_engine_poly() === 10);
 check("RDX firmware has one runtime track", d.ex.web_test_track_count() === 1);
 check("32 Factory and 21 Selected RDX voices are visible", d.ex.web_test_preset_total() === 53);
 check("RDX TYPE defaults to the optimized renderer", d.ex.web_test_rdx_type() === 1);
@@ -206,9 +206,27 @@ check(`an old autosave PATCH mismatch reloads the current LegendEP data (0x${res
 d.ex.web_test_rdx_preset(0);                          // DigiChord: FLANGER -> REVERB 59, 20
 check("RDX Reverb Depth 59 maps to Felucca send 19",
       d.ex.web_test_rdx_reverb_send(1) === 19);
-check("RDX Reverb defaults to CLOUDS while keeping TIME and DAMP 60",
+check("RDX Reverb defaults to CLOUDS while keeping TIME and using DAMP 45%",
       d.ex.web_test_rdx_reverb_model(1) === 3 &&
-      d.ex.web_test_rdx_reverb_time(1) === 20 && d.ex.web_test_rdx_reverb_damp() === 60);
+      d.ex.web_test_rdx_reverb_time(1) === 20 &&
+      d.ex.web_test_rdx_reverb_live_damp(1) === 57);
+const reverbSend = d.ex.web_test_rdx_fx_live(1, 1);
+const reverbDepth = d.ex.web_test_rdx_fx_live(1, 3);
+const reverbTime = d.ex.web_test_rdx_fx_live(1, 4);
+d.ex.web_test_rdx_reverb_model_set(1, 2);
+check("switching Reverb to HALL sets DAMP 15% and preserves SEND/DEPTH/TIME",
+      d.ex.web_test_rdx_reverb_model(1) === 2 &&
+      d.ex.web_test_rdx_reverb_live_damp(1) === 19 &&
+      d.ex.web_test_rdx_fx_live(1, 1) === reverbSend &&
+      d.ex.web_test_rdx_fx_live(1, 3) === reverbDepth &&
+      d.ex.web_test_rdx_fx_live(1, 4) === reverbTime);
+d.ex.web_test_rdx_reverb_model_set(1, 3);
+check("switching Reverb back to CLOUDS sets DAMP 45% and preserves other values",
+      d.ex.web_test_rdx_reverb_model(1) === 3 &&
+      d.ex.web_test_rdx_reverb_live_damp(1) === 57 &&
+      d.ex.web_test_rdx_fx_live(1, 1) === reverbSend &&
+      d.ex.web_test_rdx_fx_live(1, 3) === reverbDepth &&
+      d.ex.web_test_rdx_fx_live(1, 4) === reverbTime);
 check("RDX Reverb retains the 1.5x native-reverb TIME fallback mapping",
       d.ex.web_test_rdx_reverb_mapped_size(1) === 30);
 check("RDX Delay DEPTH 50 maps to Felucca SEND 30 / FDBK 60",
@@ -356,10 +374,10 @@ d.render(1500);
 held.render(1500);
 
 d.ex.web_test_rdx_preset(0);
-const stressNotes = [48, 50, 52, 53, 55, 57, 59, 60, 64];
+const stressNotes = [48, 50, 52, 53, 55, 57, 59, 60, 62, 64, 67];
 for (const note of stressNotes) d.ex.web_midi(0x90, note, 100);
 d.render(100);
-check("nine held notes are capped at eight active voices", d.ex.web_test_active_voices() === 8);
+check("eleven held notes are capped at ten active voices", d.ex.web_test_active_voices() === 10);
 for (const note of stressNotes) d.ex.web_midi(0x80, note, 0);
 d.render(2500);
 check("released voices eventually become inactive", d.ex.web_test_active_voices() === 0);

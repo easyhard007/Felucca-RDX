@@ -3,13 +3,14 @@
 [![Build firmware and deploy Pages](https://github.com/easyhard007/Felucca-RDX/actions/workflows/pages.yml/badge.svg)](https://github.com/easyhard007/Felucca-RDX/actions/workflows/pages.yml)
 
 Felucca RDX is dedicated firmware that turns the M-VAVE FM-1 into an
-eight-voice, four-operator synthesizer inspired by the Yamaha reface DX. It is
+ten-voice, four-operator synthesizer inspired by the Yamaha reface DX. It is
 a modified fork of [Felucca](https://github.com/hugelton/Felucca) by Leo
 Kuroshita / Hügelton Instruments. The product UI exposes only the RDX
 instrument and its sound sets.
 
-The current firmware version is **Felucca RDX 0.6.15**. RDX is monotimbral: the
-runtime contains one track and one eight-voice RDX part. The old four-track
+The current firmware version is **Felucca RDX 0.6.16**. RDX is monotimbral: the
+runtime contains one track and one ten-voice RDX part. Ten voices are currently
+enabled as a performance stress test; the old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
 
@@ -63,7 +64,7 @@ single-core diagnostic build.
 
 The version is defined once in `firmware/src/rdx_version.h`. Increment its final
 component for every firmware delivered to hardware (`0.6.1`, `0.6.2`, ...,
-`0.6.15`); the splash, WebAssembly page and installer package use that value.
+`0.6.16`); the splash, WebAssembly page and installer package use that value.
 
 `.github/workflows/pages.yml` builds the dual-core RDX firmware, assembles both
 web applications with `web/make_site.py`, and deploys `build/site` to GitHub

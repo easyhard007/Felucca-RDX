@@ -631,6 +631,21 @@ EXPORT uint32_t web_test_rdx_reverb_model(uint32_t slot)
 {
     return slot < 2u ? (uint32_t)(uint16_t)rdx_fx_values(&trk[0], slot)[0] : 0xFFFFFFFFu;
 }
+EXPORT void web_test_rdx_reverb_model_set(uint32_t slot, uint32_t model)
+{
+    int16_t *p;
+    if (slot >= 2u)
+        return;
+    p = rdx_fx_values(&trk[0], slot);
+    if ((uint32_t)(uint16_t)p[0] == model)
+        return;
+    p[0] = (int16_t)(model > 3u ? 3u : model);
+    (void)rdx_reverb_model_changed(&trk[0], slot, (uint32_t)p[0]);
+}
+EXPORT uint32_t web_test_rdx_reverb_live_damp(uint32_t slot)
+{
+    return slot < 2u ? (uint32_t)(uint16_t)rdx_fx_values(&trk[0], slot)[3] : 0xFFFFFFFFu;
+}
 EXPORT uint32_t web_test_rdx_reverb_mapped_size(uint32_t slot)
 {
     const rdx_patch_t *p = rdx_track_get(0);

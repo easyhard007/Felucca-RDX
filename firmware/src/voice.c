@@ -832,7 +832,8 @@ static rdx_c1_voice_job_t rdx_c1_voice_job;
 static int32_t rdx_c1_voice_out[CTL], rdx_c1_voice_spread[CTL];
 /* Only Core1's assigned voices are saved, before publishing its job. If it
  * stalls midway through a sample, recovery must restart at the block boundary. */
-static rdx_note_t rdx_c1_before[5u];
+#define RDX_C1_VOICE_MAX 5u
+static rdx_note_t rdx_c1_before[RDX_C1_VOICE_MAX];
 
 /* Keep Core0 below the measured AC79 bottleneck.  It still prepares every
  * voice, mixes the returned samples and runs the effects, so an even voice
@@ -841,8 +842,11 @@ static uint32_t rdx_c1_voice_count(uint32_t nr)
 {
     /* Hardware captures show that the serial Core0 work happens outside the
      * parallel FM window, so overloading Core1 does not hide that cost.  Keep
-     * the high-polyphony FM loops balanced: 6 = 3:3, 7 = 3:4, 8 = 4:4. */
-    static const uint8_t count[NVOICE + 1u] = {0, 1, 2, 2, 3, 3, 3, 4, 4};
+     * the high-polyphony FM loops balanced: 6 = 3:3, 7 = 3:4, 8 = 4:4,
+     * 9 = 4:5 and 10 = 5:5 (the left number is Core0). */
+    static const uint8_t count[NVOICE + 1u] = {0, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5};
+    _Static_assert(NELEM(count) == NVOICE + 1u, "RDX Core1 split table");
+    _Static_assert(RDX_C1_VOICE_MAX >= 5u, "RDX Core1 recovery snapshots");
     return count[nr <= NVOICE ? nr : NVOICE];
 }
 

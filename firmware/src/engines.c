@@ -34,7 +34,7 @@ static uint8_t eng_mem_owner[NPART];       /* engine index + 1 whose state is in
 #include "../engines/src/eng_noise.c"
 #include "eng_fm6.c"            /* FM6: 6-operator FM, msfa ported (fm6_core.c, Apache-2.0) */
 #if FELUCCA_RDX
-#include "eng_rdx.c"            /* RDX: fixed-point four-operator Reface DX, eight voices */
+#include "eng_rdx.c"            /* RDX: fixed-point four-operator Reface DX */
 #define ENG_SLOT_12 ENG_RDX
 #else
 #define ENG_SLOT_12 ENG_FM6

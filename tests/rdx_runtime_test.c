@@ -50,9 +50,21 @@ static uint64_t isolated(unsigned preset,unsigned voices,int dual,unsigned fault
  close(fd[1]);assert(read(fd[0],&h,sizeof h)==sizeof h);close(fd[0]);waitpid(pid,&status,0);assert(status==0);return h;
 }
 int main(void){
- static const unsigned split[9]={0,1,2,2,3,3,3,4,4};
- for(unsigned n=0;n<=8;n++)assert(rdx_c1_voice_count(n)==split[n]);
- puts("RDX: 1..8 voice Core1 split is 1/2/2/3/3/3/4/4 ok");
+ static const unsigned split[11]={0,1,2,2,3,3,3,4,4,5,5};
+ for(unsigned n=0;n<=10;n++)assert(rdx_c1_voice_count(n)==split[n]);
+ puts("RDX: 1..10 voice Core1 split is 1/2/2/3/3/3/4/4/5/5 ok");
+ reset(); c1h_off=1; host_preset(&trk[0],ENGI_RDX,0);
+ trk[0].p[P_DLY]=RFX_REVERB;
+ trk[0].p[P_REV]=29;
+ trk[0].p[P_RFX2_A]=2; trk[0].p[P_RFX2_B]=91; trk[0].p[P_RFX2_C]=88; trk[0].p[P_RFX2_D]=7;
+ assert(rdx_reverb_model_changed(&trk[0],1,2)==P_RFX2_D);
+ assert(trk[0].p[P_RFX2_A]==2 && trk[0].p[P_RFX2_B]==91 && trk[0].p[P_RFX2_C]==88 &&
+        trk[0].p[P_RFX2_D]==RDX_REVERB_HALL_DAMP && trk[0].p[P_REV]==29);
+ trk[0].p[P_RFX2_A]=3;
+ assert(rdx_reverb_model_changed(&trk[0],1,3)==P_RFX2_D);
+ assert(trk[0].p[P_RFX2_B]==91 && trk[0].p[P_RFX2_C]==88 &&
+        trk[0].p[P_RFX2_D]==RDX_REVERB_CLOUDS_DAMP && trk[0].p[P_REV]==29);
+ puts("RDX: HALL/CLOUDS model changes set only the 15/45 percent DAMP companion value ok");
  for(unsigned mode=1;mode<=2;mode++)for(unsigned gap=0;gap<2;gap++)
   for(unsigned interval=7;interval<=48;interval+= interval==7?5:12){glide_case(mode,48,48+interval,gap);glide_case(mode,48+interval,48,gap);}
  puts("RDX: FULL/LEG, overlap/gap, bidirectional 7/12/24/36/48 semitone glides ok");
@@ -76,7 +88,7 @@ int main(void){
  puts("RDX: changing renderer clears AVG and PEAK on the next audio half");
  for(unsigned p=0;p<RDX_NPRESETS;p++)assert(isolated(p,1,0,0,0)==isolated(p,1,0,0,1));
  puts("RDX: all factory presets ORIGIN/OPTIMIZED audio identical");
- for(unsigned n=1;n<=8;n++){
+ for(unsigned n=1;n<=10;n++){
   uint64_t h=isolated(0,n,0,0,0);assert(h==isolated(0,n,1,0,0));
   assert(h==isolated(0,n,1,1,0));assert(h==isolated(0,n,1,17,0));
   assert(h==isolated(0,n,0,0,1));assert(h==isolated(0,n,1,0,1));

@@ -41,7 +41,7 @@
 #define FELUCCA_FM6_ONLY 0       /* 1: expose only FM6 and its factory presets; keep engine 12 for stored data */
 #endif
 #ifndef FELUCCA_RDX
-#define FELUCCA_RDX 0            /* 1: slot 12 is the eight-voice fixed-point RDX engine */
+#define FELUCCA_RDX 0            /* 1: slot 12 is the fixed-point RDX engine */
 #endif
 #define FM1_CPU1_USED FELUCCA_CPU2   /* hal/fm1_sys.h: the second core is built in; every reset holds it first (its
                                       * waiting loop is in RAM the ROM and the SPL use at boot) */
