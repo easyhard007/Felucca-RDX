@@ -570,11 +570,17 @@ EXPORT void web_test_rdx_phaser_model_set(uint32_t model) { menu_put(MI_PHSMODEL
 EXPORT uint32_t web_test_rdx_phaser_model(void) { return menu_get(MI_PHSMODEL); }
 EXPORT void web_test_rdx_flanger_model_set(uint32_t model) { menu_put(MI_FLGMODEL, model != 0u); }
 EXPORT uint32_t web_test_rdx_flanger_model(void) { return menu_get(MI_FLGMODEL); }
+EXPORT uint32_t web_test_rdx_flanger_wet_q15(uint32_t depth) { return rfx_flanger_wet_q15(depth); }
+EXPORT uint32_t web_test_rdx_flanger_feedback_q15(uint32_t depth) { return rfx_flanger_feedback_q15(depth); }
+EXPORT uint32_t web_test_rdx_flanger_speed_inc(uint32_t speed) { return rfx_flanger_speed_inc(speed); }
+EXPORT uint32_t web_test_rdx_flanger_exp_mod(int32_t sine) { return rfx_flanger_exp_mod(sine); }
+EXPORT uint32_t web_test_rdx_flanger_max_delay_q16(uint32_t depth) { return rfx_flanger_max_delay_q16(depth); }
 EXPORT void web_test_rdx_fx_set(uint32_t slot, uint32_t type, uint32_t p1, uint32_t p2)
 {
     if (slot >= 2u)
         return;
-    rdx_fx_slot_defaults(&trk[0], slot, type & 7u, p1 & 127u, p2 & 127u);
+    rdx_fx_slot_defaults(&trk[0], slot, type < RFX_N ? type : RFX_THRU,
+                         p1 & 127u, p2 & 127u);
 }
 EXPORT uint32_t web_test_rdx_fx_page_count(void)
 {
@@ -598,6 +604,15 @@ EXPORT uint32_t web_test_rdx_fx_live(uint32_t slot, uint32_t field)
     if (field == 1u) return rdx_fx_send_of(&trk[0], slot);
     p = rdx_fx_values(&trk[0], slot);
     return field < 6u ? (uint32_t)(uint16_t)p[field - 2u] : 0xFFFFFFFFu;
+}
+EXPORT int32_t web_test_rdx_fx_send_desc(uint32_t slot, uint32_t field)
+{
+    const param_desc_t *d;
+    if (slot >= 2u)
+        return -1;
+    d = track_desc(&trk[0], slot ? P_REV : P_CHOR);
+    return field == 0u ? d->fmt : field == 1u ? d->min :
+           field == 2u ? d->max : field == 3u ? d->def : -1;
 }
 EXPORT uint32_t web_test_rdx_fx_param_label_byte(uint32_t slot, uint32_t param, uint32_t pos)
 {
@@ -631,23 +646,52 @@ EXPORT uint32_t web_test_rdx_reverb_model(uint32_t slot)
 {
     return slot < 2u ? (uint32_t)(uint16_t)rdx_fx_values(&trk[0], slot)[0] : 0xFFFFFFFFu;
 }
+EXPORT void web_test_rdx_reverb_model_set(uint32_t slot, uint32_t model)
+{
+    int16_t *p;
+    if (slot >= 2u)
+        return;
+    p = rdx_fx_values(&trk[0], slot);
+    p[0] = (int16_t)clamp((int32_t)model, 0, 2);
+    (void)rdx_reverb_apply_model_damp(&trk[0], slot, (uint32_t)p[0]);
+}
+EXPORT uint32_t web_test_rdx_reverb_live_damp(uint32_t slot)
+{
+    return slot < 2u ? (uint32_t)(uint16_t)rdx_fx_values(&trk[0], slot)[3] : 0xFFFFFFFFu;
+}
 EXPORT uint32_t web_test_rdx_reverb_mapped_size(uint32_t slot)
 {
     const rdx_patch_t *p = rdx_track_get(0);
     return slot < 2u && (p->common.effects[slot][0] & 7u) == RFX_REVERB ?
            rfx_reverb_size(p->common.effects[slot][2]) : 0u;
 }
+EXPORT int32_t web_test_rdx_clouds_hall_q14(int32_t value)
+{
+    return rdx_cld_sh_tz(clamp(value, -65536, 65534), 1u);
+}
+EXPORT int32_t web_test_rdx_clouds_hall_mul(int32_t value, int32_t q15)
+{
+    return rdx_cld_mul_tz(value, q15);
+}
 EXPORT uint32_t web_test_rdx_reverb_size(void) { return rdx_rev_size; }
-EXPORT uint32_t web_test_rdx_reverb_damp(void) { return HALL_DAMP; }
-EXPORT uint32_t web_test_rdx_delay_send(uint32_t depth) { return rfx_delay_send(depth); }
 EXPORT uint32_t web_test_rdx_delay_feedback(uint32_t depth) { return rfx_delay_feedback(depth); }
+EXPORT uint32_t web_test_rdx_delay_mix_q15(uint32_t depth, uint32_t ratio10)
+{
+    return rfx_delay_mix_q15(depth, ratio10);
+}
 EXPORT uint32_t web_test_rdx_delay_samples(uint32_t time) { return rfx_delay_samples(time); }
 EXPORT uint32_t web_test_rdx_delay_color(void) { return RFX_DLY_COLOR; }
-EXPORT uint32_t web_test_rdx_delay_mix(void) { return RFX_DLY_MIX; }
 EXPORT uint32_t web_test_rdx_dist_tone_q16(uint32_t tone) { return RFX_DIST_TONE_Q16[tone & 127u]; }
 EXPORT uint32_t web_test_rdx_dist_drive_q12(uint32_t drive) { return rfx_dist_drive_q12(drive); }
 EXPORT uint32_t web_test_rdx_dist_target_q16(uint32_t drive) { return rfx_dist_target_q16(drive); }
-EXPORT uint32_t web_test_rdx_chorus_send(void) { return RFX_CHORUS_SEND; }
+EXPORT uint32_t web_test_rdx_chorus_send(void)
+{
+    uint32_t slot;
+    for (slot = 0; slot < 2u; slot++)
+        if (rdx_fx_type_of(&trk[0], slot) == RFX_CHORUS)
+            return rdx_fx_send_of(&trk[0], slot);
+    return 0u;
+}
 EXPORT uint32_t web_test_rdx_chorus_depth(void) { return rdx_cho_depth; }
 EXPORT uint32_t web_test_rdx_chorus_rate(void) { return rdx_cho_rate; }
 EXPORT uint32_t web_test_rdx_set_count(void) { return NELEM(RDX_SOUND_SETS); }
@@ -775,6 +819,18 @@ EXPORT uint32_t web_test_rdx_restore_stale_slot(void)
         return 0xFFFFFFFFu;
     return ((uint32_t)(uint16_t)trk[0].p[P_E7] << 16) |
            (web_test_rdx_reverb_send(1) << 8) | web_test_rdx_reverb_time(1);
+}
+EXPORT uint32_t web_test_rdx_restore_legacy_clouds(void)
+{
+    web_test_rdx_preset(0);                         /* DigiChord: FX2 Reverb */
+    project_capture(&proj_scratch);
+    proj_scratch.t[0].p[P_RFX2_A] = 4;             /* retired HALL3 id -> current HALL */
+    proj_scratch.t[0].p[P_RFX2_D] = 57;
+    proj_scratch.sum = proj_sum(&proj_scratch);
+    if (project_restore_runtime(&proj_scratch))
+        return 0xFFFFFFFFu;
+    return ((uint32_t)(uint16_t)trk[0].p[P_RFX2_A] << 8) |
+           (uint32_t)(uint16_t)trk[0].p[P_RFX2_D];
 }
 EXPORT uint32_t web_test_engine_poly(void) { return ENG_RDX.poly; }
 EXPORT uint32_t web_test_rdx_home_knob4_is_transpose(void) { return ENG_RDX.knob[3] == P_TRANS; }

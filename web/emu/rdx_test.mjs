@@ -13,6 +13,15 @@ const check = (name, ok) => {
   console.log(`rdx: ${name.padEnd(72)} ${ok ? "ok" : "FAIL"}`);
   failed ||= !ok;
 };
+const readIndexedString = (ex, name, ...prefix) => {
+  let value = "";
+  for (let i = 0; i < 32; i++) {
+    const c = ex[name](...prefix, i);
+    if (!c) break;
+    value += String.fromCharCode(c);
+  }
+  return value;
+};
 
 async function boot() {
   const { instance } = await WebAssembly.instantiate(bytes, {});
@@ -67,6 +76,26 @@ check("PHS and FLG MODEL retain the original Felucca algorithms for A/B tests",
       d.ex.web_test_rdx_phaser_model() === 0 && d.ex.web_test_rdx_flanger_model() === 0);
 d.ex.web_test_rdx_phaser_model_set(1);
 d.ex.web_test_rdx_flanger_model_set(1);
+check("RDX Flanger uses the retained THK-W linear 30..100 percent wet macro",
+      d.ex.web_test_rdx_flanger_wet_q15(0) === 0 &&
+      d.ex.web_test_rdx_flanger_wet_q15(1) === 9830 &&
+      d.ex.web_test_rdx_flanger_wet_q15(64) === 21299 &&
+      d.ex.web_test_rdx_flanger_wet_q15(127) === 32768);
+check("RDX Flanger DEPTH raises damped feedback from 0.30 to 0.75",
+      d.ex.web_test_rdx_flanger_feedback_q15(0) === 0 &&
+      d.ex.web_test_rdx_flanger_feedback_q15(1) === 9830 &&
+      d.ex.web_test_rdx_flanger_feedback_q15(127) === 24576);
+check("RDX Flanger RATE follows the 0.05..6.5 Hz quadratic phase curve",
+      d.ex.web_test_rdx_flanger_speed_inc(0) === 4869 &&
+      d.ex.web_test_rdx_flanger_speed_inc(127) === 633900);
+check("RDX Flanger squares the unipolar sine before delay modulation",
+      d.ex.web_test_rdx_flanger_exp_mod(-32768) === 0 &&
+      d.ex.web_test_rdx_flanger_exp_mod(0) === 16384 &&
+      d.ex.web_test_rdx_flanger_exp_mod(32767) === 65534);
+check("RDX Flanger retains THK-W's 1.5 ms base plus five-ms DEPTH excursion",
+      d.ex.web_test_rdx_flanger_max_delay_q16(0) === 0 &&
+      d.ex.web_test_rdx_flanger_max_delay_q16(64) === 11617442 &&
+      d.ex.web_test_rdx_flanger_max_delay_q16(127) === 18785894);
 check("MIDI velocity curve defaults to HARD 1", d.ex.web_test_velocity_curve() === 3);
 const velocityAt64 = [96, 80, 64, 48, 32];
 let velocityCurvesOk = true;
@@ -190,7 +219,7 @@ check("FX opens exactly FX, FX1, FX2, GLOBAL FX and SLICER in that order",
 d.ex.web_test_rdx_preset(2);                          // MotionPad: CHORUS -> DELAY
 check("preset FX bytes initialise the live serial type/send controls",
       d.ex.web_test_rdx_fx_live(0, 0) === 3 &&
-      d.ex.web_test_rdx_fx_live(0, 1) === 20 &&
+      d.ex.web_test_rdx_fx_live(0, 1) === 15 &&
       d.ex.web_test_rdx_fx_live(1, 0) === 6);
 check("FX1 and FX2 parameter labels follow their selected effect types",
       cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(0, slot, pos), 0) === "DEPTH" &&
@@ -201,24 +230,73 @@ check("an old autosave cannot force DynaLead back to polyphony",
       d.ex.web_test_rdx_restore_stale_voice(4) === 1);
 const restoredLegend = d.ex.web_test_rdx_restore_stale_slot();
 check(`an old autosave PATCH mismatch reloads the current LegendEP data (0x${restoredLegend.toString(16)})`,
-      restoredLegend === ((6 << 16) | (16 << 8) | 62));
+      restoredLegend === ((6 << 16) | (20 << 8) | 62));
 
 d.ex.web_test_rdx_preset(0);                          // DigiChord: FLANGER -> REVERB 59, 20
-check("RDX Reverb Depth 59 maps to Felucca send 19",
-      d.ex.web_test_rdx_reverb_send(1) === 19);
-check("RDX Reverb defaults to CLOUDS while keeping TIME and DAMP 60",
-      d.ex.web_test_rdx_reverb_model(1) === 3 &&
-      d.ex.web_test_rdx_reverb_time(1) === 20 && d.ex.web_test_rdx_reverb_damp() === 60);
+check("RDX Reverb Depth 59 maps to rounded Depth / 2.5 send 24",
+      d.ex.web_test_rdx_reverb_send(1) === 24);
+check("RDX Reverb defaults to the Clouds-based HALL with 45% DAMP",
+      d.ex.web_test_rdx_reverb_model(1) === 2 &&
+      d.ex.web_test_rdx_reverb_time(1) === 20 && d.ex.web_test_rdx_reverb_live_damp(1) === 57);
+const reverbSendBeforeModelAB = d.ex.web_test_rdx_fx_live(1, 1);
+const reverbTimeBeforeModelAB = d.ex.web_test_rdx_fx_live(1, 4);
+d.ex.web_test_rdx_reverb_model_set(1, 0);
+d.ex.web_test_rdx_reverb_model_set(1, 2);
+check("switching Reverb to HALL writes only its 45% DAMP baseline",
+      d.ex.web_test_rdx_reverb_model(1) === 2 &&
+      d.ex.web_test_rdx_reverb_live_damp(1) === 57 &&
+      d.ex.web_test_rdx_fx_live(1, 1) === reverbSendBeforeModelAB &&
+      d.ex.web_test_rdx_fx_live(1, 4) === reverbTimeBeforeModelAB);
+check("retired reverb model ids restore as the retained HALL model",
+      d.ex.web_test_rdx_restore_legacy_clouds() === ((2 << 8) | 57));
+check("HALL Q14 compression keeps two extra delay-line bits symmetrically",
+      d.ex.web_test_rdx_clouds_hall_q14(1) === 0 &&
+      d.ex.web_test_rdx_clouds_hall_q14(-1) === 0 &&
+      d.ex.web_test_rdx_clouds_hall_q14(7) === 3 &&
+      d.ex.web_test_rdx_clouds_hall_q14(-7) === -3);
+check("HALL feedback multiplication rounds positive and negative values symmetrically",
+      d.ex.web_test_rdx_clouds_hall_mul(7, 20480) === 4 &&
+      d.ex.web_test_rdx_clouds_hall_mul(-7, 20480) === -4);
+let hallMultiplyExact = true;
+for (const value of [-262143, -65537, -32769, -32768, -257, -9, -8, -7, -1,
+                       0, 1, 7, 8, 9, 257, 32767, 32768, 65537, 262136]) {
+  for (const q15 of [-20480, -1, 0, 1, 11469, 20480, 32700, 32767]) {
+    const expected = Number((BigInt(value) * BigInt(q15)) / 32768n);
+    hallMultiplyExact &&= d.ex.web_test_rdx_clouds_hall_mul(value, q15) === expected;
+  }
+}
+check("HALL branchless multiply remains exact over signed feedback cases", hallMultiplyExact);
 check("RDX Reverb retains the 1.5x native-reverb TIME fallback mapping",
       d.ex.web_test_rdx_reverb_mapped_size(1) === 30);
-check("RDX Delay DEPTH 50 maps to Felucca SEND 30 / FDBK 60",
-      d.ex.web_test_rdx_delay_send(50) === 30 &&
-      d.ex.web_test_rdx_delay_feedback(50) === 60);
-check("RDX Delay keeps Felucca's COLOR 70 / MIX 90 defaults",
-      d.ex.web_test_rdx_delay_color() === 70 && d.ex.web_test_rdx_delay_mix() === 90);
+check("RDX Delay follows PicoFace's 0..50 percent feedback macro",
+      d.ex.web_test_rdx_delay_feedback(0) === 0 &&
+      d.ex.web_test_rdx_delay_feedback(1) === 0 &&
+      d.ex.web_test_rdx_delay_feedback(127) === 64);
+check("RDX Delay wet mix starts near 10 percent and reaches 25 percent at 1.0x",
+      d.ex.web_test_rdx_delay_mix_q15(0, 10) === 0 &&
+      d.ex.web_test_rdx_delay_mix_q15(1, 10) === 3316 &&
+      d.ex.web_test_rdx_delay_mix_q15(127, 10) === 8192);
+check("RDX Delay test ratio covers 0.1x through 5.0x and clips at unity",
+      d.ex.web_test_rdx_delay_mix_q15(1, 1) === 332 &&
+      d.ex.web_test_rdx_delay_mix_q15(127, 50) === 32767);
+check("RDX Delay keeps Felucca's warm COLOR 70 default",
+      d.ex.web_test_rdx_delay_color() === 70);
 check("RDX Delay TIME uses the measured full-rate 11.6 ms to 1201 ms range",
       d.ex.web_test_rdx_delay_samples(0) === 512 &&
       d.ex.web_test_rdx_delay_samples(127) === 52964);
+d.ex.web_test_rdx_preset(4);                          // DynaLead: Delay Depth 1, Time 74
+check("DynaLead Delay uses 1.0x ratio, audible base mix and zero feedback",
+      d.ex.web_test_rdx_fx_live(0, 0) === 6 &&
+      d.ex.web_test_rdx_fx_live(0, 1) === 10 &&
+      d.ex.web_test_rdx_fx_live(0, 2) === 1 &&
+      d.ex.web_test_rdx_fx_live(0, 3) === 74 &&
+      d.ex.web_test_rdx_fx_live(0, 4) === 0 &&
+      d.ex.web_test_rdx_fx_live(0, 5) === 70);
+check("Delay SEND card exposes the temporary 0.1x..5.0x ratio with 1.0x default",
+      d.ex.web_test_rdx_fx_send_desc(0, 0) === 14 &&
+      d.ex.web_test_rdx_fx_send_desc(0, 1) === 1 &&
+      d.ex.web_test_rdx_fx_send_desc(0, 2) === 50 &&
+      d.ex.web_test_rdx_fx_send_desc(0, 3) === 10);
 check("RDX Distortion uses PicoFaceDX's linear 300 Hz to 8 kHz one-pole TONE",
       d.ex.web_test_rdx_dist_tone_q16(0) === 2742 &&
       d.ex.web_test_rdx_dist_tone_q16(42) === 21849 &&
@@ -232,6 +310,7 @@ check("RDX Distortion level is unity at 0, gently raised at 5, and +30% at 100",
       d.ex.web_test_rdx_dist_target_q16(5) === 66519 &&
       d.ex.web_test_rdx_dist_target_q16(100) === 85197 &&
       d.ex.web_test_rdx_dist_target_q16(127) === 85197);
+d.ex.web_test_rdx_preset(0);                          // DigiChord: TIME 20 -> native fallback SIZE 30
 d.ex.web_midi(0x90, 60, 100);
 d.renderFrames(128);
 check("a sounding RDX patch publishes the native-reverb fallback SIZE diagnostic",
@@ -280,8 +359,8 @@ for (const [p, label] of [[0, "flanger/reverb"], [1, "distortion/delay"],
   effected.ex.web_midi(0x90, 60, 100);
   const audio = effected.renderFrames(128 * 120);
   if (p === 2) {
-    check("RDX Chorus uses fixed Felucca SEND 20",
-          effected.ex.web_test_rdx_chorus_send() === 20);
+    check("RDX Chorus maps MotionPad Depth 30 to SEND 15",
+          effected.ex.web_test_rdx_chorus_send() === 15);
     check("RDX Chorus halves MotionPad DEPTH 30 while keeping RATE 74",
           effected.ex.web_test_rdx_chorus_depth() === 15 &&
           effected.ex.web_test_rdx_chorus_rate() === 74);
@@ -304,6 +383,11 @@ const sideEnergy = (audio) => {
 fxab.ex.web_test_rdx_preset(0);
 fxab.ex.web_test_rdx_fx_set(0, 4, 96, 64);             // Flanger only
 fxab.ex.web_test_rdx_fx_set(1, 0, 0, 0);
+check("RDX Flanger fixes the outer serial SEND at 100 percent",
+      fxab.ex.web_test_rdx_fx_live(0, 1) === 127 &&
+      fxab.ex.web_test_rdx_fx_send_desc(0, 1) === 127 &&
+      fxab.ex.web_test_rdx_fx_send_desc(0, 2) === 127 &&
+      fxab.ex.web_test_rdx_fx_send_desc(0, 3) === 127);
 fxab.ex.web_test_rdx_flanger_model_set(0);
 fxab.ex.web_midi(0x90, 60, 100);
 const oldFlanger = fxab.renderFrames(128 * 16, true);
@@ -314,6 +398,10 @@ const rdxFlanger = fxab.renderFrames(128 * 16, true);
 fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
 check("RDX Flanger creates stereo width while the retained Felucca model remains mono",
       sideEnergy(oldFlanger) < 0.001 && sideEnergy(rdxFlanger) > 0.01);
+check("Flanger detail returns to DEPTH and RATE only",
+      readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 0) === "DEPTH" &&
+      readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 1) === "RATE" &&
+      readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 2) === "");
 
 fxab.ex.web_test_rdx_fx_set(0, 5, 96, 64);             // Phaser only
 fxab.ex.web_test_rdx_phaser_model_set(1);
@@ -323,13 +411,26 @@ fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
 check("RDX Phaser's PicoFace short-delay stage produces a stereo output",
       sideEnergy(rdxPhaser) > 0.01);
 
+fxab.ex.web_test_rdx_fx_set(0, 3, 96, 64);             // JIANT three-voice Chorus
+fxab.ex.web_test_rdx_fx_set(1, 0, 0, 0);
+check("JIANT Chorus maps Depth 96 to SEND 48",
+      fxab.ex.web_test_rdx_fx_live(0, 1) === 48);
+check("JIANT Chorus exposes DEPTH and RATE controls",
+      readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 0) === "DEPTH" &&
+      readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 1) === "RATE");
+fxab.ex.web_midi(0x90, 60, 100);
+const jiantChorus = fxab.renderFrames(128 * 24, true);
+fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
+check("the sole Chorus type now creates JIANT stereo width",
+      sideEnergy(jiantChorus) > 0.01);
+
 fxab.ex.web_test_rdx_fx_set(0, 7, 90, 80);             // Clouds -> clean Distortion
 fxab.ex.web_test_rdx_fx_set(1, 1, 0, 64);
 fxab.ex.web_midi(0x90, 60, 100);
-const cloudsThroughFx2 = fxab.renderFrames(128 * 40, true);
+const hallThroughFx2 = fxab.renderFrames(128 * 48, true);
 fxab.ex.web_midi(0x80, 60, 0); fxab.render(1800);
-check("Clouds stereo return passes through FX2 without collapsing to mono",
-      sideEnergy(cloudsThroughFx2) > 0.01);
+check("HALL Q14 half-band kernel renders a non-silent stereo return",
+      hallThroughFx2.peak > 0.002 && sideEnergy(hallThroughFx2) > 0.01);
 
 d.ex.web_test_rdx_preset(0);
 held.ex.web_test_rdx_preset(0);

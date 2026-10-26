@@ -48,14 +48,16 @@ static const param_desc_t RDX_VOICE_DESC = {"MODE", F_ENUM, 0, 2, 0, N_RDX_VOICE
 static const param_desc_t RDX_PORTA_DESC = {"PORTA", F_INT, 0, 127, 0, 0, 0};
 static const param_desc_t RDX_TRANS_DESC = {"Trans.", F_SEMI, -24, 24, 0, 0, 0};
 static const char *const N_RDX_GLOBAL[] = {"OFF", "TYPE1", "TYPE2"};
-static const char *const N_RDX_REVERB[] = {"ROOM", "SPRING", "HALL", "CLOUDS"};
+static const char *const N_RDX_REVERB[] = {"ROOM", "SPRING", "HALL"};
 static const param_desc_t RDX_FX1_TYPE_DESC = {"TYPE", F_ENUM, 0, RFX_N - 1, 0, RDX_FX_NAMES, 0};
 static const param_desc_t RDX_FX2_TYPE_DESC = {"TYPE", F_ENUM, 0, RFX_N - 1, 0, RDX_FX_NAMES, 0};
 static const param_desc_t RDX_FX1_SEND_DESC = {"SEND", F_PCT, 0, 127, 0, 0, 0};
 static const param_desc_t RDX_FX2_SEND_DESC = {"SEND", F_PCT, 0, 127, 0, 0, 0};
+static const param_desc_t RDX_FULL_SEND_DESC = {"SEND", F_PCT, 127, 127, 127, 0, 0};
+static const param_desc_t RDX_DELAY_RATIO_DESC = {"SEND", F_RATIO10, 1, 50, 10, 0, 0};
 static const param_desc_t RDX_GLOBAL_TYPE_DESC = {"TYPE", F_ENUM, 0, 2, 0, N_RDX_GLOBAL, 0};
 static const param_desc_t RDX_GLOBAL_MIX_DESC = {"MIX", F_PCT, 0, 127, 0, 0, 0};
-static const param_desc_t RDX_REVERB_TYPE_DESC = {"TYPE", F_ENUM, 0, 3, 3, N_RDX_REVERB, 0};
+static const param_desc_t RDX_REVERB_TYPE_DESC = {"TYPE", F_ENUM, 0, 2, 2, N_RDX_REVERB, 0};
 static const param_desc_t RDX_DRIVE_DESC = {"DRIVE", F_PCT, 0, 127, 24, 0, 0};
 static const param_desc_t RDX_TONE_DESC = {"TONE", F_CUTOFF, 0, 127, 64, 0, 0};
 static const param_desc_t RDX_LEVEL_DESC = {"LEVEL", F_PCT, 0, 127, 100, 0, 0};
@@ -66,7 +68,7 @@ static const param_desc_t RDX_RATE_DESC = {"RATE", F_LFOHZ, 0, 127, 40, 0, 0};
 static const param_desc_t RDX_TIME_DESC = {"TIME", F_PCT, 0, 127, 64, 0, 0};
 static const param_desc_t RDX_FDBK_DESC = {"FDBK", F_PCT, 0, 120, 60, 0, 0};
 static const param_desc_t RDX_COLOR_DESC = {"COLOR", F_PCT, 0, 127, 70, 0, 0};
-static const param_desc_t RDX_DAMP_DESC = {"DAMP", F_PCT, 0, 127, 60, 0, 0};
+static const param_desc_t RDX_DAMP_DESC = {"DAMP", F_PCT, 0, 127, 57, 0, 0};
 
 static const param_desc_t *rdx_fx_param_desc(uint32_t type, uint32_t k)
 {
@@ -273,9 +275,15 @@ static const param_desc_t *track_desc(const track_t *t, uint32_t id)
 #if FELUCCA_RDX
     if (eng_idx(t->eng_req) == ENGI_RDX) {
         if (id == P_DIST) return &RDX_FX1_TYPE_DESC;
-        if (id == P_CHOR) return &RDX_FX1_SEND_DESC;
+        if (id == P_CHOR) return rdx_fx_type_of(t, 0) == RFX_DELAY ?
+                                   &RDX_DELAY_RATIO_DESC :
+                                   rdx_fx_type_of(t, 0) == RFX_FLANGER ?
+                                   &RDX_FULL_SEND_DESC : &RDX_FX1_SEND_DESC;
         if (id == P_DLY) return &RDX_FX2_TYPE_DESC;
-        if (id == P_REV) return &RDX_FX2_SEND_DESC;
+        if (id == P_REV) return rdx_fx_type_of(t, 1) == RFX_DELAY ?
+                                  &RDX_DELAY_RATIO_DESC :
+                                  rdx_fx_type_of(t, 1) == RFX_FLANGER ?
+                                  &RDX_FULL_SEND_DESC : &RDX_FX2_SEND_DESC;
         if (id >= P_ITYPE && id <= P_IC)
             return rdx_fx_param_desc(rdx_fx_type_of(t, 0), id - P_ITYPE);
         if (id >= P_RFX2_A && id <= P_RFX2_D)
@@ -483,6 +491,10 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
     case F_STEPS:
         fmt_int(val, v);
         *unit = "STEP";
+        break;
+    case F_RATIO10:
+        fmt_fix(val, v, 1);
+        *unit = "x";
         break;
     default:
         if (d->names) {                               /* F_INT with a 0-terminated name list: the range */

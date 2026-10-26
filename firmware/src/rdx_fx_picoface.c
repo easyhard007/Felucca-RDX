@@ -62,27 +62,82 @@ static inline int32_t rfx_pf_line_read(const int16_t *line, uint32_t wp, uint32_
     return a + (((line[r1] - a) * (int32_t)frac) >> 15);
 }
 
-/* PicoFaceDX Flanger: sine LFO, 1.5 ms base delay, up to another 5 ms,
- * right delay x1.1, feedback 0.3, and 0.7 * (dry + delayed). */
+/* The retained RDX Flanger is the successful THK-W experiment: PicoFaceDX's
+ * 1.5 ms base plus a DEPTH-scaled 0..5 ms excursion, a 5% longer right tap,
+ * positive damped feedback and a .30..1.00 wet macro.  DigiChord's DEPTH 64
+ * therefore sweeps 1.5..4.02 ms at about 65% wet, keeping its low-mid body. */
+#define RFX_FL_MIN_Q16 4335206u                    /* 1.50 ms at 44.1 kHz */
+#define RFX_FL_SPAN_Q16 14450688u                   /* 5.00 ms at DEPTH 127 */
+
+static inline uint32_t rfx_flanger_max_delay_q16(uint32_t depth)
+{
+    depth &= 127u;
+    return depth ? RFX_FL_MIN_Q16 +
+                   (RFX_FL_SPAN_Q16 * depth + 63u) / 127u : 0u;
+}
+
+static inline uint32_t rfx_flanger_wet_q15(uint32_t depth)
+{
+    uint32_t x;
+    depth &= 127u;
+    if (!depth)
+        return 0u;
+    x = depth - 1u;
+    return 9830u + (22938u * x + 63u) / 126u;          /* .30 .. 1.00 */
+}
+
+static inline uint32_t rfx_flanger_feedback_q15(uint32_t depth)
+{
+    uint32_t x;
+    depth &= 127u;
+    if (!depth)
+        return 0u;
+    x = depth - 1u;
+    return 9830u + (14746u * x * x + 7938u) / 15876u; /* .30 .. .75 */
+}
+
+static inline uint32_t rfx_flanger_speed_inc(uint32_t speed)
+{
+    speed &= 127u;
+    /* Phase increments per sample: 0.0500 Hz + speed^2 * 0.000400 Hz,
+     * reaching 6.51 Hz without a divide or table lookup in the audio path. */
+    return 4869u + speed * speed * 39u;
+}
+
+static inline uint32_t rfx_flanger_exp_mod(int32_t sine)
+{
+    uint32_t uni = (uint32_t)(sine + 32768);            /* 0 .. 65535 */
+    return (uni * uni) >> 16;                           /* exponential unipolar sweep */
+}
+
 static RFX_FAST void rfx_flanger_rdx(rdx_fx_slot_t *s, int32_t *l, int32_t *r,
                                      uint32_t n, uint32_t si)
 {
     int16_t *ll = RFX_PF_FL_LINE(si, 0), *lr = RFX_PF_FL_LINE(si, 1);
     uint32_t i, wp = s->pf_fl_wp, fill = s->pf_fl_fill, ph = s->pf_ph;
-    uint32_t inc = (uint32_t)mulq16((int32_t)RDX_LFO_INC[s->p2 & 127u], 15965u); /* x .2436 */
-    uint32_t excursion = (14450688u * (uint32_t)s->p1 + 63u) / 127u; /* 5 ms max, Q16 samples */
-    const uint32_t base = 4335206u;                    /* 1.5 ms, Q16 samples */
+    uint32_t inc = rfx_flanger_speed_inc(s->p2);
+    uint32_t dmin = RFX_FL_MIN_Q16;
+    uint32_t dmax = rfx_flanger_max_delay_q16(s->p1);
+    uint32_t wet = rfx_flanger_wet_q15(s->p1);
+    int32_t feedback = (int32_t)rfx_flanger_feedback_q15(s->p1);
     for (i = 0; i < n; i++) {
-        uint32_t wave = (uint32_t)(osc_sine(ph) + 32768);
-        uint32_t dl = base + (uint32_t)mulq16((int32_t)excursion, wave);
-        uint32_t dr = dl + dl / 10u;
+        uint32_t wave = rfx_flanger_exp_mod(osc_sine(ph));
+        uint32_t dl = dmin + (uint32_t)mulq16((int32_t)(dmax - dmin), wave);
+        uint32_t dr = dl + dl / 20u;
         int32_t vl = rfx_pf_line_read(ll, wp, fill, dl, RFX_PF_FL_MASK);
-        int32_t vr = rfx_pf_line_read(lr, wp, fill, dr, RFX_PF_FL_MASK);
+        int32_t vr, fbl, fbr, yl, yr;
+        vr = rfx_pf_line_read(lr, wp, fill, dr, RFX_PF_FL_MASK);
         int32_t xl = clamp(l[i], -196607, 196607), xr = clamp(r[i], -196607, 196607);
-        int32_t yl = clamp(xl + (vl << 2), -262143, 262143);
-        int32_t yr = clamp(xr + (vr << 2), -262143, 262143);
-        ll[wp] = (int16_t)clamp((xl >> 2) + mulq16(vl, 19661u), -32768, 32767);
-        lr[wp] = (int16_t)clamp((xr >> 2) + mulq16(vr, 19661u), -32768, 32767);
+        yl = clamp(xl + (mulq15(vl, (int32_t)wet) << 2), -262143, 262143);
+        yr = clamp(xr + (mulq15(vr, (int32_t)wet) << 2), -262143, 262143);
+        /* At high feedback, damp the returned energy before the soft knee so
+         * short-delay FM harmonics cannot turn into a metallic digital howl. */
+        fbl = mulq15(vl, feedback);
+        fbr = mulq15(vr, feedback);
+        s->pf_fl_fb_lp[0] += ((fbl - s->pf_fl_fb_lp[0]) * 3) >> 2;
+        s->pf_fl_fb_lp[1] += ((fbr - s->pf_fl_fb_lp[1]) * 3) >> 2;
+        ll[wp] = (int16_t)clamp((xl >> 2) + softclip(s->pf_fl_fb_lp[0]), -32768, 32767);
+        lr[wp] = (int16_t)clamp((xr >> 2) + softclip(s->pf_fl_fb_lp[1]), -32768, 32767);
         l[i] = mulq16(yl, 45875u);                     /* x 0.7 */
         r[i] = mulq16(yr, 45875u);
         wp = (wp + 1u) & RFX_PF_FL_MASK;
@@ -94,6 +149,9 @@ static RFX_FAST void rfx_flanger_rdx(rdx_fx_slot_t *s, int32_t *l, int32_t *r,
     s->pf_fl_fill = (uint16_t)fill;
     s->pf_ph = ph;
 }
+
+#undef RFX_FL_MIN_Q16
+#undef RFX_FL_SPAN_Q16
 
 static inline uint32_t rfx_pf_ap_coef(const uint16_t *tab, uint32_t tri)
 {

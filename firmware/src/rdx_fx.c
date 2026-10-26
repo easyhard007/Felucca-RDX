@@ -1,19 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * The Reface DX has two serial effect slots.  This file is included by fx.c
  * after Felucca's INSERT implementation, so its inexpensive fixed-point drive,
- * phaser and flanger building blocks can be shared.  Chorus and Reverb take
- * sends at their slot positions into Felucca's native parallel buses.
+ * phaser and flanger building blocks can be shared.
  *
  * Delay reuses Felucca's native full-rate feedback-delay core and its complete
  * 65536-sample line.  A Reface DX is monotimbral, so one sounding RDX Part owns
  * that line at a time; this preserves the full 1.486 s range and the serial
- * FX1 -> FX2 position without the dull FS / 8 approximation.  Chorus and HALL
- * also keep Felucca's native kernels; CLOUDS uses a fixed-point port of the
- * original Clouds Dattorro/Griesinger topology.  The chain itself is stereo:
- * the mono FM
- * mix is duplicated at its input, every slot receives both channels from the
- * preceding slot, and HALL's native mid/side return is reconstructed before
- * FX2 instead of discarding its width there. */
+ * FX1 -> FX2 position without the dull FS / 8 approximation.  Chorus uses
+ * JIANT's three-voice stereo ensemble.  RDX HALL uses the fixed-point port of Clouds'
+ * Dattorro/Griesinger topology, and Felucca's older native Hall is excluded
+ * from RDX builds.  The chain is stereo: the mono FM mix is duplicated at its
+ * input and every slot receives both channels from the preceding slot. */
 #if FELUCCA_RDX
 
 #define RFX_NSLOT (NTRK * 2u)
@@ -51,6 +48,7 @@ typedef struct {
     uint32_t dist_gain_q16[2];
     uint32_t pf_ph, pf_aux_ph;              /* PicoFace phaser and its short-delay LFO */
     uint32_t pf_alpha[2];                   /* two all-pass coefficients, Q16 */
+    int32_t pf_fl_fb_lp[2];                 /* damped RDX Flanger feedback, quarter-scale */
     uint16_t pf_fl_wp, pf_fl_fill, pf_ph_wp, pf_ph_fill;
     uint16_t ds_wp, ds_fill;
     uint16_t rv_comb_i[4], rv_ap_i[2], rv_sp_w;
@@ -71,6 +69,74 @@ static struct {
     int32_t l[CTL], r[CTL], in[CTL], wet[CTL], side[CTL];
 } rfx_work __attribute__((section(".pool")));
 
+/* JIANT's three-voice ensemble gets one line per physical Reface slot, so FX1
+ * and FX2 can both use CHORUS without sharing delay history. */
+typedef struct {
+    int16_t buf[CHO_LEN];
+    uint32_t w, ph;
+    int32_t depth_cur;
+    uint8_t primed;
+} rfx_chorus2_t;
+static rfx_chorus2_t rfx_chorus2[RFX_NSLOT] __attribute__((section(".pool")));
+
+/* Pure serial effect costs over one complete 128-frame I2S half.  Each timed
+ * region includes input preparation, the effect kernel and stereo return,
+ * but no RDX voice rendering.  HALL3 is the sole retained HALL algorithm. */
+enum { RDX_FXPERF_HALL3, RDX_FXPERF_CHORUS2, RDX_FXPERF_N };
+static struct {
+    volatile uint32_t avg_q8;
+    volatile uint16_t peak_us;
+    volatile uint8_t valid;
+    uint32_t half_ticks;
+    uint8_t half_seen;
+} rdx_fx_perf[RDX_FXPERF_N];
+
+#if defined(FM1_TICKS_PER_US)
+#define RDX_FX_PERF_TIMER 1
+#else
+#define RDX_FX_PERF_TIMER 0
+#endif
+
+static void rdx_fx_perf_half_begin(void)
+{
+    uint32_t i;
+    for (i = 0; i < RDX_FXPERF_N; i++) {
+        rdx_fx_perf[i].half_ticks = 0;
+        rdx_fx_perf[i].half_seen = 0;
+    }
+}
+
+#if RDX_FX_PERF_TIMER
+static void rdx_fx_perf_add(uint32_t kind, uint32_t ticks)
+{
+    if (kind >= RDX_FXPERF_N)
+        return;
+    rdx_fx_perf[kind].half_ticks += ticks;
+    rdx_fx_perf[kind].half_seen = 1;
+}
+#endif
+
+static void rdx_fx_perf_half_end(void)
+{
+#if RDX_FX_PERF_TIMER
+    uint32_t i;
+    for (i = 0; i < RDX_FXPERF_N; i++) {
+        uint32_t us, q8;
+        if (!rdx_fx_perf[i].half_seen)
+            continue;
+        us = (rdx_fx_perf[i].half_ticks + FM1_TICKS_PER_US / 2u) / FM1_TICKS_PER_US;
+        q8 = us << 8;
+        if (!rdx_fx_perf[i].valid) {
+            rdx_fx_perf[i].avg_q8 = q8;
+            rdx_fx_perf[i].valid = 1;
+        } else
+            rdx_fx_perf[i].avg_q8 = (rdx_fx_perf[i].avg_q8 * 31u + q8 + 16u) >> 5;
+        if (us > rdx_fx_perf[i].peak_us)
+            rdx_fx_perf[i].peak_us = (uint16_t)(us > 65535u ? 65535u : us);
+    }
+#endif
+}
+
 /* The lines above use quarter-scale int16 storage: one eighth of PicoFace's
  * float scratch footprint while retaining the original delay ranges. */
 #if defined(__EMSCRIPTEN__)
@@ -87,7 +153,8 @@ static uint32_t rfx_slot_set(rdx_fx_slot_t *s, uint32_t type, uint32_t send,
                              uint32_t model)
 {
     uint32_t changed = !s->valid || s->type != type || s->model != model ||
-                       (type == RFX_REVERB && s->p1 != p1);
+                       (type == RFX_REVERB && s->p1 != p1) ||
+                       (type == RFX_FLANGER && ((s->p1 == 0u) != (p1 == 0u)));
     if (changed) {
         memset(s, 0, sizeof *s);
         s->valid = 1;
@@ -104,14 +171,12 @@ static uint32_t rfx_slot_set(rdx_fx_slot_t *s, uint32_t type, uint32_t send,
 
 /* Each physical Reface slot owns one complete Felucca HALL.  Slot 0 reuses
  * the firmware's original buffers; slot 1 uses the second instance above. */
-static void rfx_hall_clear(uint32_t slot)
+static void rfx_native_reverb_clear(uint32_t slot)
 {
     int16_t *comb = slot ? rdx_rev_comb2 : rev_comb;
     int16_t *ap = slot ? rdx_rev_u2.ap : rev_ap;
-    hall_t *h = slot ? &rdx_hl2 : &hl;
     memset(comb, 0, REV_COMB_LEN * sizeof *comb);
     memset(ap, 0, REV_AP_LEN * sizeof *ap);
-    memset(h, 0, sizeof *h);
 }
 
 /* PicoFaceDX's one-pole TONE coefficient, Q16.  Its cutoff is linear from
@@ -286,18 +351,26 @@ static __attribute__((noinline)) void rfx_swept_felucca(rdx_fx_slot_t *s, int32_
 
 #include "rdx_fx_picoface.c"
 
-/* Reface Delay DEPTH is mapped onto the two controls which shaped Felucca's
- * old parallel delay.  DEPTH 50 therefore has the familiar SEND 30 / FDBK 60
- * balance.  At the top, feedback stops at Felucca's stable documented limit. */
-static uint32_t rfx_delay_send(uint32_t depth)
-{
-    return ((depth & 127u) * 3u + 2u) / 5u;
-}
-
+/* PicoFaceDX's Reface Delay macro.  The serial insert always receives its
+ * input at unity.  DEPTH chooses 10..25% wet (with 0 as bypass) and 0..50%
+ * feedback.  The overview SEND card is temporarily a 0.1x..5.0x multiplier
+ * on that final wet mix, encoded directly as tenths (10 = 1.0x). */
 static uint32_t rfx_delay_feedback(uint32_t depth)
 {
-    uint32_t v = ((depth & 127u) * 6u + 2u) / 5u;
-    return v > 120u ? 120u : v;
+    return (depth & 127u) * 64u / 127u;
+}
+
+static uint32_t rfx_delay_mix_q15(uint32_t depth, uint32_t ratio10)
+{
+    uint32_t mix;
+    depth &= 127u;
+    if (!depth)
+        return 0u;
+    ratio10 = (uint32_t)clamp((int32_t)ratio10, 1, 50);
+    /* 0.10 + 0.15 * DEPTH / 127, matching FxDelay::setFbParam(). */
+    mix = 3277u + (depth * 4915u + 63u) / 127u;
+    mix = (mix * ratio10 + 5u) / 10u;
+    return mix > 32767u ? 32767u : mix;
 }
 
 static uint32_t rfx_delay_samples(uint32_t time)
@@ -307,7 +380,6 @@ static uint32_t rfx_delay_samples(uint32_t time)
 }
 
 #define RFX_DLY_COLOR 70u                    /* Felucca's warm default */
-#define RFX_DLY_MIX 90u                      /* Felucca's default wet-bus mix */
 
 static void rfx_delay_state_clear(rdx_fx_slot_t *s)
 {
@@ -321,34 +393,33 @@ static __attribute__((noinline)) void rfx_delay(rdx_fx_slot_t *s, int32_t *b, ui
     int16_t *line = dly_buf;
     uint32_t i;
     uint32_t dl = rfx_delay_samples(s->p2);
-    uint32_t wet = (uint32_t)s->p1 * 9u / 5u;
-    int32_t send = (int32_t)s->send * 258;
-    int32_t fb = (int32_t)s->p3 * 230;
+    int32_t mix = (int32_t)rfx_delay_mix_q15(s->p1, s->send);
+    int32_t fb = (int32_t)s->p3 * 258;
     int32_t col = 2000 + (int32_t)s->p4 * 240;
-    int32_t mix = (int32_t)(wet > 127u ? 127u : wet) * 258;
-    int32_t xmax;
-    if (si != rfx_delay_owner || !send)
+    if (si != rfx_delay_owner || !mix)
         return;
-    xmax = 0x7FFFFFFF / send;
     for (i = 0; i < n; i++) {
         int32_t x = b[i];
-        int32_t in = mulq15(clamp(x, -xmax, xmax), send);
         uint32_t rp = s->ds_wp >= dl ? s->ds_wp - dl : s->ds_wp + RFX_DLY_LEN - dl;
         int32_t o = s->ds_fill >= dl ? line[rp] : 0;
         s->ds_lp += mulq15(o - s->ds_lp, col);
         line[s->ds_wp] =
-            (int16_t)clamp((in >> 1) + mulq15(s->ds_lp, fb), -32768, 32767);
+            (int16_t)clamp((x >> 1) + mulq15(s->ds_lp, fb), -32768, 32767);
         if (++s->ds_wp >= RFX_DLY_LEN)
             s->ds_wp = 0;
         if (s->ds_fill < dl)
             s->ds_fill++;
-        b[i] = x + mulq15(o << 1, mix);
+        b[i] = mulq15(x, 32767 - mix) + mulq15(o << 1, mix);
     }
 }
 
 /* Reface Depth is much larger numerically than Felucca's old send setting.
- * The requested mapping is deliberately simple: integer Depth / 3. */
-static uint32_t rfx_reverb_send(uint32_t depth) { return (depth & 127u) / 3u; }
+ * The requested mapping is deliberately simple: rounded Depth / 2.5. */
+static uint32_t rfx_reverb_send(uint32_t depth)
+{
+    depth &= 127u;
+    return (depth * 2u + 2u) / 5u;                     /* Reface DEPTH / 2.5, rounded */
+}
 
 /* Reface TIME values around 60 sound too short when copied directly to the
  * native HALL.  Stretch them by 1.5 and saturate at Felucca's 0 .. 127 SIZE. */
@@ -432,14 +503,16 @@ static __attribute__((noinline)) void rfx_rev_spring(rdx_fx_slot_t *s, const int
     }
 }
 
+#define RDX_REVERB_FADE_SAMPLES 512u
 static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32_t slot,
-                                                        int32_t *l, int32_t *r, uint32_t n)
+                                                         int32_t *l, int32_t *r, uint32_t n,
+                                                         uint32_t tail_blocks)
 {
     int16_t *comb = slot ? rdx_rev_comb2 : rev_comb;
     int16_t *ap = slot ? rdx_rev_u2.ap : rev_ap;
-    hall_t *h = slot ? &rdx_hl2 : &hl;
     uint32_t i, value = s->send;
     int32_t send, xmax, size = (int32_t)rfx_reverb_size(s->p3), damp = s->p4;
+    int32_t amount;
     if (!value)
         return;
     send = (int32_t)value * 258;                       /* Felucca send 0 .. 42, Q15 */
@@ -450,54 +523,99 @@ static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32
         rfx_work.wet[i] = 0;
         rfx_work.side[i] = 0;
     }
-    h->side = 0;
     if (s->p1 == 0u)
         rfx_rev_room(s, rfx_work.in, rfx_work.wet, n, comb, ap, size, damp);
     else if (s->p1 == 1u)
         rfx_rev_spring(s, rfx_work.in, rfx_work.wet, n, comb,
                        slot ? rdx_rev_u2.sp : rev_u.sp, size, damp);
-    else if (s->p1 == 2u)
-        rev_hall_core(rfx_work.in, rfx_work.wet, n, comb, ap, h, size, damp, h->sd);
     else
-        rdx_clouds_process(slot, rfx_work.in, rfx_work.wet, rfx_work.side,
-                           n, s->p3, s->p4);
+        rdx_clouds_process_h3_entry(slot, rfx_work.in, rfx_work.wet, rfx_work.side,
+                                    n, s->p3, s->p4);
     rdx_rev_size = (uint8_t)size;
+    amount = (int32_t)s->p2 * 258;
     for (i = 0; i < n; i++) {
-        int32_t amount = (int32_t)s->p2 * 258;
-        int32_t wet = s->p1 == 3u ? rdx_cld_mul(rfx_work.wet[i], amount) :
+        /* DEPTH is outside the reverb feedback loop, so its one-LSB rounding
+         * cannot sustain a limit cycle.  Use the cheaper original multiply;
+         * HALL keeps corrected rounding inside its Q14 tank. */
+        int32_t wet = s->p1 >= 2u ? rdx_cld_mul(rfx_work.wet[i], amount) :
                                     mulq15(rfx_work.wet[i], amount);
-        int32_t side = s->p1 == 3u ? rdx_cld_mul(rfx_work.side[i], amount) :
-                       h->side ? mulq15(h->sd[i], amount) : 0;
+        int32_t side = s->p1 >= 2u ? rdx_cld_mul(rfx_work.side[i], amount) : 0;
+        /* The common tail counter used to stop on a non-zero noise floor.  A
+         * HALL return always approaches that boundary over 512 samples, so
+         * the final block reaches effectively zero before processing stops. */
+        if (s->p1 >= 2u && tail_blocks && tail_blocks * CTL <= RDX_REVERB_FADE_SAMPLES) {
+            uint32_t left = tail_blocks * CTL;
+            int32_t fade_q15 = (int32_t)((left > i ? left - i : 0u) *
+                                         (32768u / RDX_REVERB_FADE_SAMPLES));
+            wet = rdx_cld_mul_tz(wet, fade_q15);
+            side = rdx_cld_mul_tz(side, fade_q15);
+        }
         l[i] += wet + side;
         r[i] += wet - side;
     }
 }
 
-#define RFX_CHORUS_SEND 20u
 static uint8_t rdx_cho_depth = 60u, rdx_cho_rate = 40u;
 
-/* Feed the slot signal into Felucca's native Chorus at SEND 20, then return its
- * wet signal immediately.  The next slot therefore receives dry + Chorus. */
-static __attribute__((noinline)) void rfx_chorus_serial(rdx_fx_slot_t *s, int32_t *l,
-                                                        int32_t *r, uint32_t n)
+/* JIANT's chorus ensemble: three linearly interpolated taps, separated by
+ * 120 degrees of LFO phase.  The 300 / 420 / 540-sample bases are roughly
+ * 6.8 / 9.5 / 12.2 ms at 44.1 kHz.  The first two taps form the stereo
+ * difference while all three form a unity-gain wet centre. */
+static inline int32_t rfx_chorus2_tap(const rfx_chorus2_t *q, int32_t delay_q8)
 {
-    uint32_t i;
-    uint32_t depth = s->p1 >> 1;                       /* Reface DEPTH -> half Felucca pitch excursion */
+    uint32_t ri = (uint32_t)delay_q8 >> 8;
+    int32_t f = delay_q8 & 255;
+    int32_t a = q->buf[(q->w - ri) & (CHO_LEN - 1u)];
+    int32_t b = q->buf[(q->w - ri - 1u) & (CHO_LEN - 1u)];
+    return a + (((b - a) * f) >> 8);
+}
+
+static inline int32_t rfx_chorus2_ensemble(const rfx_chorus2_t *q, int32_t depth,
+                                            int32_t *side)
+{
+    int32_t a = rfx_chorus2_tap(q, (300 << 8) +
+                                (((osc_sine(q->ph) + 32768) * depth) >> 8));
+    int32_t b = rfx_chorus2_tap(q, (420 << 8) +
+                                (((osc_sine(q->ph + 0x55555555u) + 32768) * depth) >> 8));
+    int32_t c = rfx_chorus2_tap(q, (540 << 8) +
+                                (((osc_sine(q->ph + 0xAAAAAAAAu) + 32768) * depth) >> 8));
+    *side = a - b;
+    return ((a + b + c) * 21845) >> 15;                /* x2 / three taps; line stores input / 2 */
+}
+
+static __attribute__((noinline)) void rfx_chorus2_serial(rdx_fx_slot_t *s, uint32_t si,
+                                                         int32_t *l, int32_t *r, uint32_t n)
+{
+    rfx_chorus2_t *q = &rfx_chorus2[si % RFX_NSLOT];
+    uint32_t i, inc = LFO_INC[s->p2 & 127u] / CTL;
+    int32_t target = (int32_t)(s->p1 >> 1) * 6;         /* same half-depth mapping as retained CHORUS */
     int32_t send = (int32_t)s->send * 258;
+    int32_t dstep;
     if (!send)
         return;
-    int32_t xmax = 0x7FFFFFFF / send;
-    for (i = 0; i < n; i++) {
-        int32_t mid = (l[i] >> 1) + (r[i] >> 1);
-        rfx_work.in[i] = mulq15(clamp(mid, -xmax, xmax), send);
+    if (!q->primed) {
+        q->depth_cur = target;
+        q->primed = 1;
     }
-    fx_chorus_bus(rfx_work.in, rfx_work.wet, n, s->p2, depth);
-    rdx_cho_depth = (uint8_t)depth;
+    /* JIANT glides a quarter of a parameter change during each block. */
+    dstep = ((target - q->depth_cur) >> 2) / (int32_t)n;
+    if (!dstep && target != q->depth_cur)
+        dstep = target > q->depth_cur ? 1 : -1;
+    for (i = 0; i < n; i++) {
+        int32_t mid = (l[i] >> 1) + (r[i] >> 1), wet, side;
+        int32_t in = mulq15(mid, send);
+        q->buf[q->w & (CHO_LEN - 1u)] = (int16_t)clamp(in >> 1, -32768, 32767);
+        q->ph += inc;
+        if ((dstep > 0 && q->depth_cur < target) || (dstep < 0 && q->depth_cur > target))
+            q->depth_cur += dstep;
+        wet = rfx_chorus2_ensemble(q, q->depth_cur, &side);
+        side = (side * 80) >> 7;                        /* JIANT's default stereo width */
+        l[i] += wet + side;
+        r[i] += wet - side;
+        q->w++;
+    }
+    rdx_cho_depth = (uint8_t)(target / 6);
     rdx_cho_rate = s->p2;
-    for (i = 0; i < n; i++) {
-        l[i] += rfx_work.wet[i];
-        r[i] += rfx_work.wet[i];
-    }
 }
 
 /* Delay keeps Felucca's one full-length mono feedback line.  In a stereo
@@ -636,14 +754,20 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         uint32_t p4 = (uint32_t)clamp(pv[3], 0, 127);
         uint32_t si = rfx_slot_index(t, k);
         rdx_fx_slot_t *s = &f->slot[k];
-        uint32_t old_cloud = s->valid && s->type == RFX_REVERB && s->p1 == 3u;
+        uint32_t old_reverb = s->valid && s->type == RFX_REVERB;
+        uint32_t old_chorus = s->valid && s->type == RFX_CHORUS;
         uint32_t model = ty == RFX_PHASER ? rdx_phaser_model_get() :
                          ty == RFX_FLANGER ? rdx_flanger_model_get() : 0u;
-        uint32_t changed = rfx_slot_set(s, ty, send, p1, p2, p3, p4, model);
-        if (changed && ty == RFX_REVERB && p1 < 3u)
-            rfx_hall_clear(k);                          /* no old native-reverb tail in this physical slot */
-        if (changed && (old_cloud || (ty == RFX_REVERB && p1 == 3u)))
-            rdx_clouds_clear(k);                        /* CLOUDS owns a separate tail for each physical slot */
+        uint32_t changed;
+        if (ty == RFX_REVERB && p1 > 2u)
+            p1 = 2u;                                   /* invalid future/corrupt model -> HALL */
+        changed = rfx_slot_set(s, ty, send, p1, p2, p3, p4, model);
+        if (changed && (old_reverb || ty == RFX_REVERB)) {
+            rfx_native_reverb_clear(k);                 /* ROOM / SPRING share these physical lines */
+            rdx_clouds_clear(k);                        /* HALL owns a separate tail per physical slot */
+        }
+        if (changed && (old_chorus || ty == RFX_CHORUS))
+            memset(&rfx_chorus2[si % RFX_NSLOT], 0, sizeof rfx_chorus2[0]);
         if (!send || ty == RFX_THRU)
             continue;
         if (ty >= RFX_DIST && ty <= RFX_PHASER && ty != RFX_CHORUS) {
@@ -663,9 +787,19 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
             rfx_wah(s, rfx_work.r, n, rdx_touch_wah_get(t), 1u);
             break;
         case RFX_CHORUS:
-            rfx_chorus_serial(s, rfx_work.l, rfx_work.r, n);
+#if RDX_FX_PERF_TIMER
+            {
+                uint32_t fx_t0 = fm1_ticks();
+                rfx_chorus2_serial(s, si, rfx_work.l, rfx_work.r, n);
+                rdx_fx_perf_add(RDX_FXPERF_CHORUS2, fm1_ticks() - fx_t0);
+            }
+#else
+            rfx_chorus2_serial(s, si, rfx_work.l, rfx_work.r, n);
+#endif
             break;
         case RFX_FLANGER:
+            if (!p1)
+                break;                                  /* Reface DEPTH zero is a true bypass */
             if (model)
                 rfx_flanger_rdx(s, rfx_work.l, rfx_work.r, n, si);
             else {
@@ -686,7 +820,16 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
                 rfx_delay_stereo(s, rfx_work.l, rfx_work.r, n, si);
             break;
         case RFX_REVERB:
-            rfx_reverb_serial(s, k, rfx_work.l, rfx_work.r, n);
+#if RDX_FX_PERF_TIMER
+            {
+                uint32_t rv_t0 = fm1_ticks();
+                rfx_reverb_serial(s, k, rfx_work.l, rfx_work.r, n, f->tail);
+                if (p1 == 2u)
+                    rdx_fx_perf_add(RDX_FXPERF_HALL3, fm1_ticks() - rv_t0);
+            }
+#else
+            rfx_reverb_serial(s, k, rfx_work.l, rfx_work.r, n, f->tail);
+#endif
             break;
         default: break;
         }
@@ -697,8 +840,14 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         b[k] = (rfx_work.l[k] >> 1) + (rfx_work.r[k] >> 1);
         rfx_work.side[k] = (rfx_work.l[k] >> 1) - (rfx_work.r[k] >> 1);
     }
-    if (!voices && f->tail)
-        f->tail--;
+    if (!voices && f->tail && !--f->tail) {
+        /* Do not leave the Q14 tank's final quantised state parked until the
+         * next note. */
+        for (k = 0; k < 2u; k++)
+            if (f->slot[k].valid && f->slot[k].type == RFX_REVERB && f->slot[k].p1 >= 2u) {
+                rdx_clouds_clear(k);
+            }
+    }
 }
 
 /* Per-preset loudness calibration, measured after the complete stereo serial

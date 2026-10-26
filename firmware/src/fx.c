@@ -34,13 +34,11 @@ static struct {
     uint32_t sp_ph;                      /* .. the output tap's wobble */
 } fx;
 
-/* RDX patches carry their own Reverb TIME.  Their serial slots call the same
- * Felucca HALL core with DAMP 60 and a per-slot mapped SIZE.  HALL_SIZE remains
- * the last-run value for the browser/INFO diagnostic and the legacy wrapper. */
+/* RDX patches carry their own Reverb TIME.  rdx_fx.c publishes the last mapped
+ * size for browser diagnostics; its HALL is the Clouds topology, not the
+ * native Felucca Hall compiled below for ordinary Felucca builds. */
 #if FELUCCA_RDX
 static uint8_t rdx_rev_size = 64u;
-#define HALL_SIZE ((int32_t)rdx_rev_size)
-#define HALL_DAMP 60
 #else
 #define HALL_SIZE ((int32_t)song.g[G_RSIZE])
 #define HALL_DAMP ((int32_t)song.g[G_RDAMP])
@@ -63,6 +61,7 @@ static uint8_t rdx_rev_size = 64u;
                                           * |x - o| < 749000, far past any peak the chain reaches) */
 _Static_assert(sizeof rev_comb / 2u >= SP_LEN && sizeof rev_u.sp / 4u >= 4u * (SP_N + 1u), "SPRING in ROOM's buffers");
 
+#if !FELUCCA_RDX
 /* HALL (G_RTYPE 2, 1.2): a smooth, dense, stereo reverb, again in ROOM's buffers (its few states and one block
  * of work in the pool, no .bss). ROOM's 4 combs each ring on their own (the metallic tone); here every echo
  * goes round 8 lines that all feed each other, and they run at half the rate (22.05 kHz: the same memory holds
@@ -113,12 +112,12 @@ typedef struct {                         /* HALL's state (in the pool: no .bss) 
 } hall_t;
 static hall_t hl __attribute__((section(".pool")));
 #define rev_side (hl.sd)
+#endif
 #if FELUCCA_RDX
-/* A second native HALL instance is enough for the two Reface effect slots,
- * including the factory patches which select Reverb in both. */
+/* ROOM and SPRING reuse Felucca's physical lines.  A second copy keeps the two
+ * serial Reface slots independent; HALL has its own Clouds memory. */
 static int16_t rdx_rev_comb2[REV_COMB_LEN] __attribute__((section(".pool")));
 static rev_u_t rdx_rev_u2 __attribute__((section(".pool")));
-static hall_t rdx_hl2 __attribute__((section(".pool")));
 #endif
 
 /* DIST: low cut -> drive (1x..8x, exponential) -> asymmetric soft clip
@@ -348,9 +347,14 @@ static __attribute__((noinline)) void rev_spring(const int32_t *rev_in, int32_t 
     }
 }
 
+/* Native Felucca HALL is intentionally not compiled into Felucca RDX: its
+ * HALL label now selects rdx_clouds_process.  Keep the implementation here for
+ * upstream/non-RDX builds.  Helpers round feedback towards zero so a loop of
+ * floors cannot hold an offset and a little noise forever. */
 /* HALL's helpers: m / 2^sh rounded towards zero (a product that feeds back must not floor: a loop of floors
  * holds an offset and a little noise for ever) */
 static inline int32_t sh_tz(int32_t m, uint32_t sh) { return (m + ((m >> 31) & ((1 << sh) - 1))) >> sh; }
+#if !FELUCCA_RDX
 /* HALL's return can be four lines x HL_OUT, wider than the ordinary Q15 paths.  Keep this product wide: the
  * generic 32-bit mulq15 would overflow here and turn the low-pass into loud noise. */
 static inline int32_t hall_tone(int32_t state, int32_t input, int32_t *rem)
@@ -547,7 +551,9 @@ static __attribute__((noinline)) void rev_hall(const int32_t *rev_in, int32_t *o
 {
     rev_hall_core(rev_in, out, n, rev_comb, rev_ap, &hl, HALL_SIZE, HALL_DAMP, rev_side);
 }
+#endif
 
+#if !FELUCCA_RDX
 /* the reverb's buffers and states to silence (the model changed) */
 static void rev_clear(void)
 {
@@ -565,6 +571,7 @@ static void rev_clear(void)
     hl.ml1 = hl.ml2 = hl.sl1 = hl.sl2 = 0;
     hl.me1 = hl.me2 = hl.se1 = hl.se2 = 0;
 }
+#endif
 
 #if FELUCCA_CPU2
 /* the dry mix and the sends, as each core adds its parts into them (after Jangada: mx[1] is the second core's,
@@ -594,6 +601,7 @@ static int32_t part_buf[CTL];                            /* a part's block (mix_
 #define SM1_b part_buf
 #endif
 
+#if !FELUCCA_RDX
 /* the model changed (to rt): the old one's block fades out (HALL's stereo difference with it), its buffers are
  * cleared, the new one starts from silence */
 static __attribute__((noinline)) void rev_switch(const int32_t *rev_in, int32_t *wet, uint32_t n, int32_t rt)
@@ -615,6 +623,7 @@ static __attribute__((noinline)) void rev_switch(const int32_t *rev_in, int32_t 
     rev_clear();
     fx.rtype = (uint8_t)rt;
 }
+#endif
 
 /* Felucca's native parallel Chorus bus.  Kept as one shared kernel so the
  * normal firmware and RDX patches use exactly the same full-rate effect. */
@@ -639,6 +648,7 @@ static __attribute__((noinline)) void fx_chorus_bus(const int32_t *cho_in, int32
     }
 }
 
+#if !FELUCCA_RDX
 /* process the three buses for one block; sends in, wet stereo-equal out */
 static void fx_buses(const int32_t *cho_in, const int32_t *dly_in, const int32_t *rev_in, int32_t *wet,
                      uint32_t n)
@@ -684,6 +694,7 @@ static __attribute__((noinline)) void rev_side_mix(int32_t *l, int32_t *r, uint3
         r[i] -= rev_side[i];
     }
 }
+#endif
 
 /* INSERT (1.5, Discussions #78 and #177): one effect per track, after DIST and before the SLICER, with a dry / wet
  * MIX. TYPE (P_ITYPE, N_ITYPE; stored, append-only) and its three values A B C (P_IA .. P_IC, what they mean: params.c

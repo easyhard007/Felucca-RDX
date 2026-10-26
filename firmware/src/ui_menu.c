@@ -364,7 +364,7 @@ static void menu_row(uint32_t k, uint32_t row)
  * follow every INFO_CPU_MS. */
 #define INFO_Y 32
 #if FELUCCA_RDX
-#define INFO_N 25u
+#define INFO_N 29u
 #else
 #define INFO_N 6u
 #endif
@@ -374,6 +374,10 @@ static struct {
 #if FELUCCA_RDX
     uint16_t ravg, rpeak;
     uint8_t rvoices, rvalid;
+    uint16_t hall_avg, hall_peak;
+    uint8_t hall_valid;
+    uint16_t chorus2_avg, chorus2_peak;
+    uint8_t chorus2_valid;
     uint16_t wall_peak, irq_peak, wait_peak;
     uint32_t late_count;
     uint8_t late_source;
@@ -396,6 +400,12 @@ static uint32_t info_sig(void)
         info.rpeak = rdx_perf.peak_us;
         info.rvoices = rdx_perf.voices;
         info.rvalid = rdx_perf.valid;
+        info.hall_avg = (uint16_t)clamp((int32_t)((rdx_fx_perf[RDX_FXPERF_HALL3].avg_q8 + 128u) >> 8), 0, 65535);
+        info.hall_peak = rdx_fx_perf[RDX_FXPERF_HALL3].peak_us;
+        info.hall_valid = rdx_fx_perf[RDX_FXPERF_HALL3].valid;
+        info.chorus2_avg = (uint16_t)clamp((int32_t)((rdx_fx_perf[RDX_FXPERF_CHORUS2].avg_q8 + 128u) >> 8), 0, 65535);
+        info.chorus2_peak = rdx_fx_perf[RDX_FXPERF_CHORUS2].peak_us;
+        info.chorus2_valid = rdx_fx_perf[RDX_FXPERF_CHORUS2].valid;
         info.wall_peak = (uint16_t)clamp((int32_t)audio_timing.peak.wall, 0, 65535);
         info.irq_peak = (uint16_t)clamp((int32_t)audio_timing.peak.irq, 0, 65535);
         info.wait_peak = (uint16_t)clamp((int32_t)audio_timing.peak.wait, 0, 65535);
@@ -422,6 +432,8 @@ static uint32_t info_sig(void)
     return info.c0 * 7u + info.c1 * 17u + info.p0 * 31u + info.p1 * 47u + info_usb() * 131u +
 #if FELUCCA_RDX
            info.ravg * 73u + info.rpeak * 89u + info.rvoices * 101u + info.rvalid * 113u +
+           info.hall_avg * 109u + info.hall_peak * 241u + info.hall_valid * 251u +
+           info.chorus2_avg * 271u + info.chorus2_peak * 277u + info.chorus2_valid * 281u +
            info.wall_peak * 127u + info.irq_peak * 137u + info.wait_peak * 149u +
            info.late_count * 157u + info.late_source * 163u + info.late.wall * 167u + info.late.irq * 173u +
            info.late.c0 * 179u + info.late.wait * 181u + info.late.c1 * 191u + info.late.t5 * 193u +
@@ -443,8 +455,9 @@ static void info_rows(void)                            /* (in screen rows: cv_oy
 {
 #if FELUCCA_RDX
     static const char *const LBL[INFO_N] = {
-        "RDX AVG", "RDX PEAK", "RDX VOICES", "CORE 0", "C0 PEAK", "CORE 1", "C1 PEAK",
-        "WALL MAX", "IRQ MAX", "WAIT MAX", "LATE COUNT", "LATE SOURCE",
+        "RDX AVG", "RDX PEAK", "RDX VOICES", "HALL3 AVG", "HALL3 PEAK",
+        "CHOR2 AVG", "CHOR2 PEAK",
+        "CORE 0", "C0 PEAK", "CORE 1", "C1 PEAK", "WALL MAX", "IRQ MAX", "WAIT MAX", "LATE COUNT", "LATE SOURCE",
         "L WALL", "L IRQ", "L C0 BUSY", "L C1 WAIT", "L C1 WORK", "L T5 IRQ",
         "L PRE", "L RDX CTL", "L C0 FM", "L XFER", "L POST FX", "L TAIL", "L OTHER"
     };
@@ -474,36 +487,40 @@ static void info_rows(void)                            /* (in screen rows: cv_oy
             case 0: v = info.ravg; valid = info.rvalid; break;
             case 1: v = info.rpeak; valid = info.rvalid; break;
             case 2: v = info.rvoices; unit = 0; break;
-            case 3: v = info.c0; unit = "%"; break;
-            case 4: v = info.p0; break;
-            case 5: v = info.c1; unit = "%"; valid = info.c1 != 0xFFFFu; break;
-            case 6: v = info.p1; valid = info.c1 != 0xFFFFu; break;
-            case 7: v = info.wall_peak; break;
-            case 8: v = info.irq_peak; break;
-            case 9: v = info.wait_peak; break;
-            case 10: v = info.late_count; unit = 0; break;
-            case 12: v = info.late.wall; valid = info.late_count != 0u; break;
-            case 13: v = info.late.irq; valid = info.late_count != 0u; break;
-            case 14: v = info.late.c0; valid = info.late_count != 0u; break;
-            case 15: v = info.late.wait; valid = info.late_count != 0u; break;
-            case 16: v = info.late.c1; valid = info.late_count != 0u; break;
-            case 17: v = info.late.t5; valid = info.late_count != 0u; break;
-            case 18: v = info.late.pre; valid = info.late_count != 0u; break;
-            case 19: v = info.late.rdx_ctl; valid = info.late_count != 0u; break;
-            case 20: v = info.late.c0_fm; valid = info.late_count != 0u; break;
-            case 21: v = info.late.xfer; valid = info.late_count != 0u; break;
-            case 22: v = info.late.post_fx; valid = info.late_count != 0u; break;
-            case 23: v = info.late.tail; valid = info.late_count != 0u; break;
-            case 24: v = info.late.other; valid = info.late_count != 0u; break;
+            case 3: v = info.hall_avg; valid = info.hall_valid; break;
+            case 4: v = info.hall_peak; valid = info.hall_valid; break;
+            case 5: v = info.chorus2_avg; valid = info.chorus2_valid; break;
+            case 6: v = info.chorus2_peak; valid = info.chorus2_valid; break;
+            case 7: v = info.c0; unit = "%"; break;
+            case 8: v = info.p0; break;
+            case 9: v = info.c1; unit = "%"; valid = info.c1 != 0xFFFFu; break;
+            case 10: v = info.p1; valid = info.c1 != 0xFFFFu; break;
+            case 11: v = info.wall_peak; break;
+            case 12: v = info.irq_peak; break;
+            case 13: v = info.wait_peak; break;
+            case 14: v = info.late_count; unit = 0; break;
+            case 16: v = info.late.wall; valid = info.late_count != 0u; break;
+            case 17: v = info.late.irq; valid = info.late_count != 0u; break;
+            case 18: v = info.late.c0; valid = info.late_count != 0u; break;
+            case 19: v = info.late.wait; valid = info.late_count != 0u; break;
+            case 20: v = info.late.c1; valid = info.late_count != 0u; break;
+            case 21: v = info.late.t5; valid = info.late_count != 0u; break;
+            case 22: v = info.late.pre; valid = info.late_count != 0u; break;
+            case 23: v = info.late.rdx_ctl; valid = info.late_count != 0u; break;
+            case 24: v = info.late.c0_fm; valid = info.late_count != 0u; break;
+            case 25: v = info.late.xfer; valid = info.late_count != 0u; break;
+            case 26: v = info.late.post_fx; valid = info.late_count != 0u; break;
+            case 27: v = info.late.tail; valid = info.late_count != 0u; break;
+            case 28: v = info.late.other; valid = info.late_count != 0u; break;
             default: unit = 0; break;
             }
-            if (k == 11u) {
+            if (k == 15u) {
                 const char *src = info.late_source == (AUDIO_LATE_C0 | AUDIO_LATE_C1) ? "BOTH" :
                                   info.late_source == AUDIO_LATE_C0 ? "CORE0" :
                                   info.late_source == AUDIO_LATE_C1 ? "CORE1" : "SYNC";
                 cv_text_r(MR_VR, vy, &AF_M, info.late_count ? src : "--", T_THEME, T_SURF);
             } else if (!valid)
-                cv_text_r(MR_VR, vy, &AF_M, k == 5u || k == 6u ? "OFF" : "--", T_THEME, T_SURF);
+                cv_text_r(MR_VR, vy, &AF_M, k == 9u || k == 10u ? "OFF" : "--", T_THEME, T_SURF);
             else {
                 fmt_int(b, (int32_t)v);
                 if (unit)

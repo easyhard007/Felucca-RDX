@@ -1069,6 +1069,10 @@ static void edit_param(uint32_t slot, int32_t steps)
                 rdx_fx_type_changed(TSEL, 0u, (uint32_t)*vp);
             else if (id == P_DLY)
                 rdx_fx_type_changed(TSEL, 1u, (uint32_t)*vp);
+            else if (id == P_ITYPE)
+                (void)rdx_reverb_apply_model_damp(TSEL, 0u, (uint32_t)*vp);
+            else if (id == P_RFX2_A)
+                (void)rdx_reverb_apply_model_damp(TSEL, 1u, (uint32_t)*vp);
         }
 #endif
     }

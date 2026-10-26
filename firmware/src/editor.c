@@ -516,8 +516,20 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
                 set_engine((uint32_t)clamp(ed_rv(a + 2), 0, NENGINES - 1));
                 ed_load_after(&b);
             } else if (d->max > d->min) {
+                int16_t old = *vp;
                 *vp = (int16_t)enum_orig(d, clamp(ed_rv(a + 2), d->min, d->max));
                 if (a[0] == 0) {
+#if FELUCCA_RDX
+                    if (TSEL->engine == ENGI_RDX && old != *vp &&
+                        (a[1] == P_ITYPE || a[1] == P_RFX2_A)) {
+                        uint32_t damp_id = rdx_reverb_apply_model_damp(
+                            TSEL, a[1] == P_RFX2_A, (uint32_t)*vp);
+                        if (damp_id < P_COUNT)
+                            ed_w.v[damp_id] = TSEL->p[damp_id];
+                    }
+#else
+                    (void)old;
+#endif
                     (void)motion_capture(TSEL, a[1], *vp);
                     load_extend(TSEL);                      /* (ui.c undo: an audition's values after G_ENGSEL) */
                 }

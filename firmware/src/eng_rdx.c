@@ -17,8 +17,13 @@ enum {
 static const char *const RDX_FX_NAMES[RFX_N] = {
     "THRU", "DIST", "WAH", "CHORUS", "FLANGE", "PHASER", "DELAY", "REVERB"
 };
-#define RDX_FX_MARK 126
+#define RDX_FX_MARK 123                         /* 0.6.29: compound RDX Flanger macro; full serial input */
+#define RDX_RETIRED_CHORUS2 8u                 /* 0.6.26 A/B type, migrated to RFX_CHORUS */
 #define RDX_GAIN_MARK 62                         /* P_ED_FX: distinct from 0.6.8/0.6.9's marker 63 */
+/* RDX HALL is the Q14 fixed-point Clouds topology with half-band output
+ * reconstruction.  F_PCT stores a share of 127; raw 57 displays as exactly
+ * 45% after rounded percentage conversion. */
+#define RDX_REVERB_HALL_DAMP 57
 
 typedef struct __attribute__((packed)) {
     uint8_t voice_name[10], reserved1[2], transpose, mono_poly, porta_time, pb_range;
@@ -240,11 +245,13 @@ static int16_t *rdx_fx_values(track_t *t, uint32_t slot)
 
 static uint32_t rdx_fx_type_of(const track_t *t, uint32_t slot)
 {
-    return (uint32_t)clamp(t->p[slot ? P_DLY : P_DIST], RFX_THRU, RFX_REVERB);
+    return (uint32_t)clamp(t->p[slot ? P_DLY : P_DIST], RFX_THRU, RFX_N - 1u);
 }
 
 static uint32_t rdx_fx_send_of(const track_t *t, uint32_t slot)
 {
+    if (rdx_fx_type_of(t, slot) == RFX_FLANGER)
+        return 127u;                            /* DEPTH owns wet mix; the serial slot always receives unity */
     return (uint32_t)clamp(t->p[slot ? P_REV : P_CHOR], 0, 127);
 }
 
@@ -254,11 +261,11 @@ static uint32_t rdx_fx_default_send(uint32_t type, uint32_t depth)
     if (type == RFX_THRU)
         return 0u;
     if (type == RFX_CHORUS)
-        return 20u;
+        return depth / 2u;
     if (type == RFX_DELAY)
-        return (depth * 3u + 2u) / 5u;
+        return 10u;                             /* temporary SEND card: 1.0x final Delay MIX */
     if (type == RFX_REVERB)
-        return depth / 3u;
+        return (depth * 2u + 2u) / 5u;          /* Reface DEPTH / 2.5, rounded */
     return 127u;
 }
 
@@ -266,7 +273,7 @@ static uint32_t rdx_fx_default_send(uint32_t type, uint32_t depth)
  * extra controls expose values that were fixed in the first RDX firmware:
  * Delay feedback / colour and Reverb model / damping.  Reface SysEx has no
  * reverb-algorithm byte, so newly loaded factory, Selected and imported voices
- * deliberately default to CLOUDS for this RDX test release. */
+ * default to the Clouds-based HALL. */
 static void rdx_fx_slot_defaults(track_t *t, uint32_t slot, uint32_t type,
                                  uint32_t p1, uint32_t p2)
 {
@@ -287,12 +294,14 @@ static void rdx_fx_slot_defaults(track_t *t, uint32_t slot, uint32_t type,
     case RFX_FLANGER:
     case RFX_PHASER:  v[0] = (int16_t)p1; v[1] = (int16_t)p2; break;
     case RFX_DELAY:
-        fb = (p1 * 6u + 2u) / 5u;
+        /* PicoFaceDX maps Reface DEPTH to 10..25% wet and 0..50%
+         * feedback.  SEND is temporarily a 0.1x..5.0x wet multiplier. */
+        fb = p1 * 64u / 127u;
         v[0] = (int16_t)p1; v[1] = (int16_t)p2;
-        v[2] = (int16_t)(fb > 120u ? 120u : fb); v[3] = 70;
+        v[2] = (int16_t)fb; v[3] = 70;
         break;
     case RFX_REVERB:
-        v[0] = 3; v[1] = 127; v[2] = (int16_t)p2; v[3] = 60;
+        v[0] = 2; v[1] = 127; v[2] = (int16_t)p2; v[3] = RDX_REVERB_HALL_DAMP;
         break;
     default: break;
     }
@@ -317,6 +326,24 @@ static void rdx_fx_type_changed(track_t *t, uint32_t slot, uint32_t type)
     if (type == RFX_CHORUS) p2 = 40u;
     if (type == RFX_REVERB) p2 = 60u;
     rdx_fx_slot_defaults(t, slot, type, p1, p2);
+}
+
+/* Reface SysEx has no reverb-model byte.  A user switch to HALL writes only
+ * its 45% DAMP baseline; DEPTH, TIME and SEND stay put.  Return the changed
+ * parameter id so the web editor shadow can follow it. */
+static uint32_t rdx_reverb_apply_model_damp(track_t *t, uint32_t slot, uint32_t model)
+{
+    uint32_t damp_id;
+    int16_t damp;
+    if (slot >= 2u || rdx_fx_type_of(t, slot) != RFX_REVERB)
+        return P_COUNT;
+    if (model == 2u)
+        damp = RDX_REVERB_HALL_DAMP;
+    else
+        return P_COUNT;
+    damp_id = slot ? P_RFX2_D : P_IC;
+    t->p[damp_id] = damp;
+    return damp_id;
 }
 
 static const rdx_patch_t *rdx_track_get(uint32_t tr)
@@ -383,6 +410,10 @@ static void rdx_track_restored(track_t *t)
         saved[2] = t->p[P_DLY];  saved[3] = t->p[P_REV];
         for (i = 0; i < 5u; i++) saved[4u + i] = t->p[P_ITYPE + i];
         for (i = 0; i < 4u; i++) saved[9u + i] = t->p[P_RFX2_A + i];
+        /* 0.6.26 briefly exposed JIANT Chorus as type 8.  Keep old projects
+         * loadable even though JIANT is now the sole type-3 CHORUS. */
+        if ((uint32_t)saved[0] == RDX_RETIRED_CHORUS2) saved[0] = RFX_CHORUS;
+        if ((uint32_t)saved[2] == RDX_RETIRED_CHORUS2) saved[2] = RFX_CHORUS;
     }
     /* A project stores both preset and P_E7.  The preset id is the sound the
      * user selected; force PATCH to it before copying the current firmware's
@@ -401,6 +432,13 @@ static void rdx_track_restored(track_t *t)
         t->p[P_DLY] = saved[2];  t->p[P_REV] = saved[3];
         for (i = 0; i < 5u; i++) t->p[P_ITYPE + i] = saved[4u + i];
         for (i = 0; i < 4u; i++) t->p[P_RFX2_A + i] = saved[9u + i];
+        /* Retired HALL/HALL2/HALL3 ids all migrate to the one retained HALL,
+         * preserving DEPTH, TIME, DAMP and SEND. */
+        for (i = 0; i < 2u; i++) {
+            int16_t *v = rdx_fx_values(t, i);
+            if (rdx_fx_type_of(t, i) == RFX_REVERB && (v[0] < 0 || v[0] > 2))
+                v[0] = 2;
+        }
     }
 }
 

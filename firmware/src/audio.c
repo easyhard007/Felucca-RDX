@@ -224,6 +224,7 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
 #endif
 #if FELUCCA_RDX
         rdx_perf_half_begin();
+        rdx_fx_perf_half_begin();
 #endif
         if (shed_req) {
             uint8_t req = shed_req;
@@ -244,6 +245,7 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
         late = fm1_audio_free_half() != half;          /* test immediately, while this result still names this half */
 #if FELUCCA_RDX
         rdx_perf_half_end();
+        rdx_fx_perf_half_end();
 #endif
         fm1_audio_ack_half();
         audio_halves++;
