@@ -869,11 +869,14 @@ static void go_home(void)
     help_start();
 }
 
-/* HOME tapped (1.2): HOME -> MIXER (up to 1.1.5 GLO's first page) -> CLOCK (up to 1.1.5 GLO > GLOBAL) -> HOME; from any
- * other page HOME. HOME's pages are FAM_TRK's, in PAGES order, always from the first (none remembered). Held: the menu
- * (ui_input) */
+/* RDX is a single-sound instrument: HOME tapped while already on HOME stays
+ * there.  From any other page it returns HOME.  Held still opens the menu. */
 static void home_tap(void)
 {
+#if FELUCCA_RDX
+    if (!ui.home)
+        go_home();
+#else
     uint32_t i = ui.page + 1u;
     if (ui.home) {
         ui.fam_last[FAM_TRK] = 0;                     /* (open_family: the family's first, the MIXER) */
@@ -883,6 +886,7 @@ static void home_tap(void)
     } else {
         go_home();
     }
+#endif
 }
 
 /* MENU > CONTROL > SELECT PAGE (1.5.5, Discussion #188): the SELECT knob steps the pages of the family shown, a detent
@@ -1365,17 +1369,28 @@ static uint32_t preset_rank(const engine_t *e, uint32_t k)
 {
     uint32_t i, n = 0;
 #if FELUCCA_RDX
-    if (e == &ENG_RDX) {
-        for (i = 0; i < k; i++)
-            n += rdx_preset_visible(i);
-        return n;
-    }
+    if (e == &ENG_RDX)
+        return rdx_preset_rank(k);
 #endif
     if (e->presets != SMP_PRESET_TABLE)
         return k;
     for (i = 0; i < k; i++)
         n += preset_orig(e, i) == i;
     return n;
+}
+
+/* list position -> stored preset id.  RDX follows its sound-set order; the
+ * other engines retain Felucca's ascending-id order with aliases skipped. */
+static uint32_t preset_nth(const engine_t *e, uint32_t n)
+{
+    uint32_t i;
+#if FELUCCA_RDX
+    if (e == &ENG_RDX)
+        return rdx_visible_preset(n);
+#endif
+    for (i = 0; preset_orig(e, i) != i || n--; i++)
+        ;
+    return i;
 }
 
 static uint32_t preset_shown(uint32_t e)
@@ -1574,8 +1589,7 @@ static void midi_pc_load(track_t *t, uint32_t n)
             t->p[P_E7] = (int16_t)s;
         return;
     }
-    for (k = 0; preset_orig(ENGINES[e], k) != k || n--; k++)   /* the n-th shown preset */
-        ;
+    k = preset_nth(ENGINES[e], n);
     apply_preset_to(t, k);
 }
 static void midi_pc_poll(void)                       /* main loop (ui_input) */
@@ -1629,7 +1643,7 @@ static uint32_t preset_all_pos(uint32_t *total)          /* list index of the se
 /* list index n (< total) -> engine, *k its preset; NENGINES = user preset, *k its slot */
 static uint32_t preset_all_at(uint32_t n, uint32_t *k)
 {
-    uint32_t e = 0, i, r;
+    uint32_t e = 0, r;
     for (r = 0; r < NENG_SHOWN && n >= preset_shown(eng_vis(r)); r++)
         n -= preset_shown(eng_vis(r));
     if (r == NENG_SHOWN) {
@@ -1637,9 +1651,7 @@ static uint32_t preset_all_at(uint32_t n, uint32_t *k)
         return NENGINES;
     }
     e = eng_vis(r);
-    for (i = 0; preset_orig(ENGINES[e], i) != i || n--; i++)    /* the n-th shown preset */
-        ;
-    *k = i;
+    *k = preset_nth(ENGINES[e], n);
     return e;
 }
 
@@ -1792,8 +1804,7 @@ static void eng_list_step(int32_t direction)         /* the next / previous soun
         return;
     n = (cur + (direction > 0 ? 1u : total - 1u)) % total;
     if (n < np) {
-        for (k = 0; preset_orig(ENGINES[e], k) != k || n--; k++)   /* the n-th shown preset */
-            ;
+        k = preset_nth(ENGINES[e], n);
         apply_preset(k);
     } else {
         n -= np;

@@ -16,6 +16,11 @@ from pathlib import Path
 
 PATCH_SIZE = 150
 FACTORY_EXCLUDE = {"LegendEP1", "*PJ CP-70D", "DynaLd BD6"}
+# The PicoFace/RDX_new table carries two edits in FM_Brass which are not in
+# Yamaha bulk DX-00003535: FX2 was changed from Chorus to Reverb and OP1
+# velocity sensitivity from 72 to 60.  Factory means the unmodified bulk voice
+# in Felucca-RDX, so restore those two source bytes after importing the table.
+FACTORY_BYTE_FIXES = {"FM_Brass": {32: 3, 55: 72}}
 
 
 def syx_messages(data: bytes, path: Path) -> list[bytes]:
@@ -117,6 +122,8 @@ def main() -> None:
         data = [int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{2})", body)]
         if len(data) != 150:
             raise SystemExit(f"{name}: expected 150 bytes, found {len(data)}")
+        for index, value in FACTORY_BYTE_FIXES.get(name, {}).items():
+            data[index] = value
         source_factory.append((name, data))
     missing = FACTORY_EXCLUDE - {name for name, _ in entries}
     if missing:
@@ -128,6 +135,11 @@ def main() -> None:
     selected = [reface_patch(path) for path in selected_paths]
     patches = source_factory + selected
     factory_index = [i for i, (name, _) in enumerate(source_factory) if name not in FACTORY_EXCLUDE]
+    # The release browser opens on the two most useful performance voices;
+    # every other factory voice retains its original relative order.
+    factory_first = ["LegendEP", "DynaLead"]
+    front = [next(i for i in factory_index if source_factory[i][0] == name) for name in factory_first]
+    factory_index = front + [i for i in factory_index if i not in front]
     selected_index = list(range(len(source_factory), len(patches)))
     visible_index = factory_index + selected_index
     if len({name for name, _ in patches}) != len(patches):

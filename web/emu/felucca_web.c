@@ -544,6 +544,13 @@ EXPORT uint32_t web_test_user_preset(uint32_t i) { return (uint32_t)up_used(i); 
 #if FELUCCA_FM6_ONLY
 EXPORT uint32_t web_test_track_count(void) { return NTRK; }
 EXPORT uint32_t web_test_preset_total(void) { uint32_t n; (void)preset_pos(&n); return n; }
+EXPORT uint32_t web_test_visible_engine_count(void)
+{
+    uint32_t i, n = 0u;
+    for (i = 0; i < NENGINES; i++) n += eng_ok(i);
+    return n;
+}
+EXPORT uint32_t web_test_first_visible_engine(void) { return eng_vis(0u); }
 #if FELUCCA_RDX
 EXPORT void web_test_rdx_preset(uint32_t p)
 {
@@ -564,6 +571,46 @@ EXPORT void web_test_rdx_dry(void)
 }
 EXPORT void web_test_rdx_type_set(uint32_t type) { menu_put(MI_RDXTYPE, type != 0u); }
 EXPORT uint32_t web_test_rdx_type(void) { return menu_get(MI_RDXTYPE); }
+EXPORT void web_test_rdx_custom_name_load(void)
+{
+    rdx_patch_t p;
+    static const uint8_t name[10] = {'A','u','d','i','t','i','o','n',' ',' '};
+    rdx_patch_for_track(0u, &p);
+    memcpy(p.common.voice_name, name, sizeof name);
+    rdx_sx_applied(0u, &p);
+}
+EXPORT uint32_t web_test_rdx_custom_name_byte(uint32_t unused, uint32_t pos)
+{
+    char name[16];
+    (void)unused;
+    return rdx_track_custom_name(&trk[0], name, sizeof name) && pos < str_len(name) ? (uint8_t)name[pos] : 0u;
+}
+EXPORT uint32_t web_test_rdx_home_has_no_clock(void)
+{
+    uint32_t i, pages = 0u;
+    for (i = 0; i < NPAGES; i++)
+        pages += PAGES[i].fam == FAM_TRK;
+    go_home();
+    home_tap();
+    return ui.home && !pages;
+}
+EXPORT uint32_t web_test_rdx_fx_double_tap_disabled(void)
+{
+    uint32_t save_ly = ui.ly, save_t0 = ui.ly_t0;
+    uint8_t save_dt_l = lys.dt_l, save_dtap = lys.dtap;
+    ui.ly = 0u;
+    lys.dt_l = LAYER_FX;
+    lys.dt_ms = fm1_ms;
+    layer_arm(ly_bit(LAYER_FX), fm1_ticks());
+    {
+        uint32_t ok = ui.ly == LAYER_FX && !lys.dtap;
+        ui.ly = (uint8_t)save_ly;
+        ui.ly_t0 = save_t0;
+        lys.dt_l = save_dt_l;
+        lys.dtap = save_dtap;
+        return ok;
+    }
+}
 EXPORT void web_test_velocity_curve_set(uint32_t curve) { menu_put(MI_VELCURVE, curve); }
 EXPORT uint32_t web_test_velocity_curve(void) { return menu_get(MI_VELCURVE); }
 EXPORT void web_test_rdx_phaser_model_set(uint32_t model) { menu_put(MI_PHSMODEL, model != 0u); }
@@ -694,6 +741,8 @@ EXPORT uint32_t web_test_rdx_chorus_send(void)
 }
 EXPORT uint32_t web_test_rdx_chorus_depth(void) { return rdx_cho_depth; }
 EXPORT uint32_t web_test_rdx_chorus_rate(void) { return rdx_cho_rate; }
+EXPORT uint32_t web_test_rdx_master_mix_shift(void) { return MASTER_MIX_SHIFT; }
+EXPORT uint32_t web_test_rdx_default_palette(void) { return UI_VIOLET_INDEX; }
 EXPORT uint32_t web_test_rdx_set_count(void) { return NELEM(RDX_SOUND_SETS); }
 EXPORT uint32_t web_test_rdx_set_size(uint32_t set)
 {
@@ -713,6 +762,15 @@ EXPORT uint32_t web_test_rdx_preset_name_byte(uint32_t preset, uint32_t at)
 {
     const char *s = preset < RDX_NPATCHES ? RDX_PATCHES[preset].name : "";
     return at < str_len(s) ? (uint8_t)s[at] : 0u;
+}
+EXPORT uint32_t web_test_rdx_visible_preset(uint32_t shown)
+{
+    return shown < RDX_NPRESETS ? rdx_visible_preset(shown) : 0xFFFFFFFFu;
+}
+EXPORT uint32_t web_test_rdx_visible_rank(uint32_t internal)
+{
+    return internal < RDX_NPATCHES && rdx_preset_visible(internal) ?
+           preset_rank(&ENG_RDX, internal) : 0xFFFFFFFFu;
 }
 EXPORT void web_test_audio_flush(void) { ring_r = ring_w; }
 EXPORT uint32_t web_test_active_voices(void)
@@ -794,6 +852,28 @@ EXPORT uint32_t web_test_rdx_op_gain(uint32_t op)
     rdx_note_t *n = web_test_rdx_note();
     return n && op < 4u ? n->op[op].out_gain : 0;
 }
+EXPORT uint32_t web_test_rdx_op_env_gain(uint32_t op)
+{
+    rdx_note_t *n = web_test_rdx_note();
+    rdx_op_t *o;
+    if (!n || op >= 4u)
+        return 0u;
+    o = &n->op[op];
+    return o->rising ? (o->rise_gain_q16 + 32768u) >> 16 : rdx_gain(o->env);
+}
+EXPORT uint32_t web_test_rdx_fmbrass_peg_segments(void)
+{
+    rdx_note_t n;
+    rdx_peg_segment_t seg[RDX_PEG_SEGMENTS];
+    uint32_t count;
+    memset(&n, 0, sizeof n);
+    memcpy(&n.patch, RDX_PATCHES[26].patch, sizeof n.patch);
+    n.down = 1u;
+    n.peg = 64 << 16;
+    rdx_peg_enter(&n, RDX_PEG_ATTACK);
+    count = rdx_peg_prepare(&n, CTL, seg);
+    return (count << 8) | seg[0].frames;
+}
 EXPORT uint32_t web_test_rdx_voice_mode(void) { return (uint32_t)trk[0].p[P_VOICE]; }
 EXPORT void web_test_rdx_voice_mode_set(uint32_t mode)
 {
@@ -811,7 +891,7 @@ EXPORT uint32_t web_test_rdx_restore_stale_voice(uint32_t p)
 }
 EXPORT uint32_t web_test_rdx_restore_stale_slot(void)
 {
-    web_test_rdx_preset(3);                         /* visible 3 = factory slot 6, LegendEP */
+    web_test_rdx_preset(0);                         /* visible 0 = factory slot 6, LegendEP */
     project_capture(&proj_scratch);
     proj_scratch.t[0].p[P_E7] = RDX_FIRST_VISIBLE; /* simulate an older, mismatched PATCH value */
     proj_scratch.sum = proj_sum(&proj_scratch);
@@ -822,7 +902,7 @@ EXPORT uint32_t web_test_rdx_restore_stale_slot(void)
 }
 EXPORT uint32_t web_test_rdx_restore_legacy_clouds(void)
 {
-    web_test_rdx_preset(0);                         /* DigiChord: FX2 Reverb */
+    web_test_rdx_preset(2);                         /* DigiChord: FX2 Reverb */
     project_capture(&proj_scratch);
     proj_scratch.t[0].p[P_RFX2_A] = 4;             /* retired HALL3 id -> current HALL */
     proj_scratch.t[0].p[P_RFX2_D] = 57;

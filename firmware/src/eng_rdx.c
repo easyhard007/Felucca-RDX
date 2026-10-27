@@ -19,7 +19,7 @@ static const char *const RDX_FX_NAMES[RFX_N] = {
 };
 #define RDX_FX_MARK 123                         /* 0.6.29: compound RDX Flanger macro; full serial input */
 #define RDX_RETIRED_CHORUS2 8u                 /* 0.6.26 A/B type, migrated to RFX_CHORUS */
-#define RDX_GAIN_MARK 62                         /* P_ED_FX: distinct from 0.6.8/0.6.9's marker 63 */
+#define RDX_GAIN_MARK 61                         /* 1.0.0: install the release loudness calibration once */
 /* RDX HALL is the Q14 fixed-point Clouds topology with half-band output
  * reconstruction.  F_PCT stores a share of 127; raw 57 displays as exactly
  * 45% after rounded percentage conversion. */
@@ -55,6 +55,7 @@ enum { RDX_PEG_ATTACK, RDX_PEG_DECAY1, RDX_PEG_DECAY2, RDX_PEG_RELEASE,
 typedef struct {
     uint32_t ph, inc;
     uint32_t env, target, step;                 /* Reface level units, Q16.16 */
+    uint32_t rise_gain_q16, rise_step_q16;      /* linear audible gain during rising AEG segments */
     uint32_t out_gain;                          /* Q15, may exceed 1.0 */
     int32_t fb, fb_filter;                      /* oscillator output, Q15 */
     uint8_t stage, rising, rate_offset;
@@ -170,11 +171,23 @@ static int rdx_preset_visible(uint32_t preset)
 
 static uint32_t rdx_visible_preset(uint32_t at)
 {
-    uint32_t i;
-    for (i = 0; i < RDX_NPATCHES; i++)
-        if (rdx_preset_visible(i) && !at--)
-            return i;
+    uint32_t s;
+    for (s = 0; s < NELEM(RDX_SOUND_SETS); s++) {
+        if (at < RDX_SOUND_SETS[s].count)
+            return RDX_SOUND_SETS[s].preset[at];
+        at -= RDX_SOUND_SETS[s].count;
+    }
     return RDX_SET_FACTORY[0];
+}
+
+static uint32_t rdx_preset_rank(uint32_t preset)
+{
+    uint32_t s, i, rank = 0;
+    for (s = 0; s < NELEM(RDX_SOUND_SETS); s++)
+        for (i = 0; i < RDX_SOUND_SETS[s].count; i++, rank++)
+            if (RDX_SOUND_SETS[s].preset[i] == preset)
+                return rank;
+    return 0u;
 }
 
 static void rdx_note_cache(rdx_note_t *n)
@@ -353,6 +366,39 @@ static const rdx_patch_t *rdx_track_get(uint32_t tr)
     return &rdx_track_patch[tr][rdx_track_sel[tr] & 1u];
 }
 
+/* A librarian audition installs an editable track patch without changing the
+ * old factory preset number.  HOME must therefore name the live patch, not
+ * the factory slot that happened to be selected before the audition. */
+static int rdx_track_custom_active(const track_t *t)
+{
+    uint32_t tr;
+    if (t < &trk[0] || t >= &trk[NTRK] || t->eng_req != ENGI_RDX)
+        return 0;
+    tr = (uint32_t)(t - trk);
+    return (rdx_track_valid & (1u << tr)) && (rdx_track_custom & (1u << tr));
+}
+
+static int rdx_track_custom_name(const track_t *t, char *dst, uint32_t size)
+{
+    const rdx_patch_t *p;
+    uint32_t tr, n = 0u;
+    if (!size)
+        return 0;
+    dst[0] = 0;
+    if (!rdx_track_custom_active(t))
+        return 0;
+    tr = (uint32_t)(t - trk);
+    p = rdx_track_get(tr);
+    while (n < sizeof p->common.voice_name && n + 1u < size && p->common.voice_name[n]) {
+        dst[n] = (char)p->common.voice_name[n];
+        n++;
+    }
+    while (n && dst[n - 1u] == ' ')
+        n--;
+    dst[n] = 0;
+    return 1;
+}
+
 static void rdx_track_set(uint32_t tr, const rdx_patch_t *src, int custom)
 {
     uint32_t next;
@@ -511,6 +557,50 @@ static uint32_t rdx_gain(uint32_t level_q16)
     return (uint32_t)(a + (((b - a) * (int32_t)f) >> 16));
 }
 
+/* Convert an audible Q15 gain back to the AEG's Q16.16 level coordinate.
+ * RDX_new performs this conversion when a key is released during a rising
+ * segment, because rising stages are linear in audible gain while falling
+ * stages use the logarithmic Yamaha level curve. */
+static uint32_t rdx_gain_inv(uint32_t gain_q15)
+{
+    uint32_t lo = 0u, hi = 127u, a, b, d;
+    if (gain_q15 <= RDX_GAIN_Q15[0])
+        return 0u;
+    if (gain_q15 >= RDX_GAIN_Q15[127])
+        return 127u << 16;
+    while (hi - lo > 1u) {
+        uint32_t mid = (lo + hi) >> 1;
+        if (RDX_GAIN_Q15[mid] <= gain_q15)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    a = RDX_GAIN_Q15[lo];
+    b = RDX_GAIN_Q15[hi];
+    d = b - a;
+    return (lo << 16) + (d ? ((gain_q15 - a) * 65536u + d / 2u) / d : 0u);
+}
+
+/* RDX_new does not run a rising AEG segment through rdxGain() sample by
+ * sample.  It joins the audible gains at both endpoints with a straight
+ * line.  Keep that line in Q15.16 so even the slowest attack advances without
+ * quantisation stalls. */
+static void rdx_env_rise_setup(rdx_op_t *o)
+{
+    uint32_t start = rdx_gain(o->env), end = rdx_gain(o->target);
+    uint32_t distance = o->target - o->env;
+    uint32_t samples;
+    o->rise_gain_q16 = start << 16;
+    if (!distance || end <= start) {
+        o->rise_step_q16 = 0u;
+        return;
+    }
+    samples = (distance + o->step - 1u) / o->step;
+    o->rise_step_q16 = (((end - start) << 16) + samples / 2u) / samples;
+    if (!o->rise_step_q16)
+        o->rise_step_q16 = 1u;
+}
+
 /* 2^(semitones/12), Q16.  The 192-entry octave table gives 1/16-semitone
  * knots; interpolation keeps pitch bend, PEG and portamento smooth without a
  * logarithm or floating point in the audio interrupt. */
@@ -614,22 +704,116 @@ static void rdx_peg_next(rdx_note_t *n)
     rdx_peg_enter(n, s);
 }
 
-static void rdx_peg_tick(rdx_note_t *n)
+#define RDX_PEG_SEGMENTS 6u
+typedef struct {
+    uint8_t frames;
+    int32_t first, last;                         /* first/last audible samples, Q16 semitones */
+} rdx_peg_segment_t;
+
+/* Preserve PEG stage boundaries inside a 32-sample control block.  The
+ * historical renderer advanced the whole PEG first and then drew one line
+ * between the block endpoints; FM_Brass Rate1=127 can cross its first target
+ * in only a few samples, so that shortcut erased the intended pitch onset. */
+static uint32_t rdx_peg_prepare(rdx_note_t *n, uint32_t frames,
+                                rdx_peg_segment_t seg[RDX_PEG_SEGMENTS])
 {
-    int32_t next;
-    if (n->peg_stage == RDX_PEG_IDLE)
-        return;
-    if (n->peg_stage == RDX_PEG_SUSTAIN) {
-        if (!n->down)
+    uint32_t count = 0u, remaining = frames;
+    while (remaining && count < RDX_PEG_SEGMENTS) {
+        uint32_t speed, distance, to_target, nseg, reaches;
+        int32_t first, last;
+        if (n->peg_stage == RDX_PEG_SUSTAIN && !n->down) {
             rdx_peg_enter(n, RDX_PEG_RELEASE);
-        return;
+            continue;
+        }
+        if (n->peg_stage == RDX_PEG_IDLE || n->peg_stage == RDX_PEG_SUSTAIN) {
+            seg[count].frames = (uint8_t)remaining;
+            seg[count].first = seg[count].last = n->peg - (64 << 16);
+            count++;
+            remaining = 0u;
+            break;
+        }
+        speed = (uint32_t)(n->peg_step < 0 ? -n->peg_step : n->peg_step);
+        distance = (uint32_t)(n->peg_target > n->peg ?
+                              n->peg_target - n->peg : n->peg - n->peg_target);
+        to_target = speed ? (distance + speed - 1u) / speed : 1u;
+        if (!to_target)
+            to_target = 1u;
+        nseg = remaining < to_target ? remaining : to_target;
+        reaches = nseg == to_target;
+        first = n->peg + n->peg_step;
+        last = n->peg + n->peg_step * (int32_t)nseg;
+        if (reaches)
+            last = n->peg_target;
+        if (n->peg_rising) {
+            if (first > n->peg_target) first = n->peg_target;
+            if (last > n->peg_target) last = n->peg_target;
+        } else {
+            if (first < n->peg_target) first = n->peg_target;
+            if (last < n->peg_target) last = n->peg_target;
+        }
+        seg[count].frames = (uint8_t)nseg;
+        seg[count].first = first - (64 << 16);
+        seg[count].last = last - (64 << 16);
+        count++;
+        n->peg = last;
+        remaining -= nseg;
+        if (reaches)
+            rdx_peg_next(n);
     }
-    next = n->peg + n->peg_step;
-    if ((n->peg_rising && next >= n->peg_target) || (!n->peg_rising && next <= n->peg_target)) {
-        n->peg = n->peg_target;
-        rdx_peg_next(n);
-    } else
-        n->peg = next;
+    if (remaining) {                                /* defensive: six entries cover every legal PEG block */
+        seg[count - 1u].frames = (uint8_t)(seg[count - 1u].frames + remaining);
+        remaining = 0u;
+    }
+    return count;
+}
+
+static int32_t rdx_lerp_s32(int32_t first, int32_t last, uint32_t at, uint32_t span)
+{
+    return span ? first + (last - first) * (int32_t)at / (int32_t)span : first;
+}
+
+/* Convert each PEG constant-slope segment to an equally segmented phase-
+ * increment ramp.  This keeps the expensive pitch table at segment rate, not
+ * sample rate, while matching RDX_new's advance-then-use PEG ordering. */
+static void rdx_inc_curve(uint32_t base_inc, int32_t sem_first, int32_t sem_last,
+                          const rdx_peg_segment_t *seg, uint32_t nseg,
+                          uint32_t peg_enable, uint32_t len, uint32_t *dst)
+{
+    uint32_t s, offset = 0u, block_span = len > 1u ? len - 1u : 1u;
+    for (s = 0; s < nseg && offset < len; s++) {
+        uint32_t i, frames = seg[s].frames;
+        uint32_t segment_span, inc, end, distance, delta, rem, error = 0u;
+        int32_t a, b;
+        if (frames > len - offset)
+            frames = len - offset;
+        segment_span = frames > 1u ? frames - 1u : 1u;
+        a = rdx_lerp_s32(sem_first, sem_last, offset, block_span);
+        b = rdx_lerp_s32(sem_first, sem_last, offset + frames - 1u, block_span);
+        if (peg_enable) {
+            a += seg[s].first;
+            b += seg[s].last;
+        }
+        inc = rdx_inc_mod(base_inc, a);
+        end = rdx_inc_mod(base_inc, b);
+        distance = end > inc ? end - inc : inc - end;
+        delta = distance / segment_span;
+        rem = distance % segment_span;
+        for (i = 0; i < frames; i++) {
+            uint32_t step = delta;
+            dst[offset + i] = inc;
+            error += rem;
+            if (frames > 1u && error >= segment_span) {
+                error -= segment_span;
+                step++;
+            }
+            inc = end < inc ? inc - step : inc + step;
+        }
+        offset += frames;
+    }
+    while (offset < len) {
+        dst[offset] = offset ? dst[offset - 1u] : base_inc;
+        offset++;
+    }
 }
 
 static uint32_t rdx_random(uint32_t *state)
@@ -683,6 +867,9 @@ static void rdx_env_enter(rdx_op_t *o, const rdx_op_param_t *p, uint32_t stage,
                           uint32_t rate_offset, int32_t rate_macro)
 {
     uint32_t rate;
+    uint32_t was_rising = o->rising && o->stage != RDX_IDLE && o->stage != RDX_SUSTAIN;
+    if (stage == RDX_RELEASE && was_rising)
+        o->env = rdx_gain_inv((o->rise_gain_q16 + 32768u) >> 16);
     o->stage = (uint8_t)stage;
     if (stage == RDX_IDLE)
         return;
@@ -696,6 +883,8 @@ static void rdx_env_enter(rdx_op_t *o, const rdx_op_param_t *p, uint32_t stage,
     rate = (uint32_t)clamp((int32_t)(p->eg_rate[stage] & 127u) + (int32_t)rate_offset - rate_macro,
                            0, 127);
     o->step = o->rising ? RDX_ATTACK_STEP_Q16[rate] : RDX_DECAY_STEP_Q16[rate];
+    if (o->rising)
+        rdx_env_rise_setup(o);
 }
 
 static void rdx_env_next(rdx_op_t *o, const rdx_op_param_t *p, int gate,
@@ -726,9 +915,14 @@ static uint32_t rdx_env_tick(rdx_op_t *o, const rdx_op_param_t *p, int gate, int
         uint32_t next = o->env + o->step;
         if (next < o->env || next >= o->target) {
             o->env = o->target;
+            o->rise_gain_q16 = rdx_gain(o->env) << 16;
             rdx_env_next(o, p, gate, rate_offset, rate_macro);
-        } else
+            return rdx_gain(o->env);
+        } else {
             o->env = next;
+            o->rise_gain_q16 += o->rise_step_q16;
+            return (o->rise_gain_q16 + 32768u) >> 16;
+        }
     } else if (o->env <= o->target + o->step) {
         o->env = o->target;
         rdx_env_next(o, p, gate, rate_offset, rate_macro);
@@ -871,11 +1065,7 @@ static void rdx_note_on(track_t *t, voice_t *v)
         o->inc = rdx_op_inc(q, base_inc, ratio_macro, spread);
         o->out_gain = rdx_output_gain(q, vel_q8, t->p[P_E5], note);
         o->rate_offset = (uint8_t)rdx_rate_offset(note, q->rate_scaling);
-        o->stage = RDX_ATTACK;
-        o->target = RDX_ENV_TARGET_Q16[q->eg_level[0] & 127u];
-        o->rising = 1;
-        o->step = RDX_ATTACK_STEP_Q16[clamp((int32_t)q->eg_rate[0] +
-                    (int32_t)o->rate_offset - t->p[P_E4], 0, 127)];
+        rdx_env_enter(o, q, RDX_ATTACK, o->rate_offset, t->p[P_E4]);
     }
 }
 
@@ -952,11 +1142,11 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
 {
     rdx_note_t *n = rdx_note(t, v);
     const rdx_patch_t *p;
-    uint32_t i, k, alg, norm, fb_scale[4], inc_cur[4];
-    uint32_t inc_delta[4], inc_rem[4], inc_error[4];
+    uint32_t i, k, alg, norm, fb_scale[4], inc_curve[4][CTL];
+    rdx_peg_segment_t peg_seg[RDX_PEG_SEGMENTS];
+    uint32_t peg_n;
     int32_t am_cur[4], am_step[4];
-    uint8_t inc_down[4];
-    int32_t amp, damp, rate_macro, fb_macro, lfo0, lfo1, peg0, peg1;
+    int32_t amp, damp, rate_macro, fb_macro, lfo0, lfo1;
     int32_t pitch0, pitch1, target, ext_pitch, mw0, mw1;
     if (!n || !n->live)
         return;
@@ -992,10 +1182,7 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
      * only those external controls. */
     ext_pitch = (m->pitch16 - v->pitch_cur) * 4096;
     ext_pitch += m->fine * 277;                         /* residual ratio -> approximately Q16 semitones */
-    peg0 = n->peg - (64 << 16);
-    for (i = 0; i < len; i++)
-        rdx_peg_tick(n);
-    peg1 = n->peg - (64 << 16);
+    peg_n = rdx_peg_prepare(n, len, peg_seg);
     rdx_lfo_block(n, len, &lfo0, &lfo1);
     mw0 = lfo0 * t->mw / 127;                           /* Q15, full wheel = +/-1 semitone */
     mw1 = lfo1 * t->mw / 127;
@@ -1008,21 +1195,8 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
             pm0 = pm1 = 0;
         sem0 = pitch0 - n->base_pitch + ext_pitch + pm0 + mw0 * 2;
         sem1 = pitch1 - n->base_pitch + ext_pitch + pm1 + mw1 * 2;
-        if (q->peg_enable) {
-            sem0 += peg0;
-            sem1 += peg1;
-        }
-        inc_cur[k] = rdx_inc_mod(n->op[k].inc, sem0);
-        {
-            uint32_t end = rdx_inc_mod(n->op[k].inc, sem1);
-            uint32_t span = len > 1u ? len - 1u : 1u;
-            uint32_t distance;
-            inc_down[k] = end < inc_cur[k];
-            distance = inc_down[k] ? inc_cur[k] - end : end - inc_cur[k];
-            inc_delta[k] = distance / span;
-            inc_rem[k] = distance % span;
-            inc_error[k] = 0;
-        }
+        rdx_inc_curve(n->op[k].inc, sem0, sem1, peg_seg, peg_n,
+                      q->peg_enable, len, inc_curve[k]);
         if (q->lfo_amd) {
             uint32_t depth = RDX_AM_DEPTH_Q15[q->lfo_amd & 127u];
             a0 += (int32_t)(((int64_t)depth * (lfo0 * 2 - 32768)) >> 15) - mw0;
@@ -1039,7 +1213,7 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
     for (i = 0; i < len; i++) {
         int32_t a = 0, b = 0, c = 0, d = 0, s;
 #define OP(K, IN) rdx_op_sample(&n->op[(K)], &p->op[(K)], (IN), n->down, n->ending, \
-                    n->op[(K)].rate_offset, rate_macro, fb_scale[(K)], inc_cur[(K)], am_cur[(K)])
+                    n->op[(K)].rate_offset, rate_macro, fb_scale[(K)], inc_curve[(K)][i], am_cur[(K)])
         switch (alg) {
         case 0: d = OP(3, 0); c = OP(2, d); b = OP(1, c); a = OP(0, b); s = a; break;
         case 1: d = OP(3, 0); c = OP(2, 0); b = OP(1, d + c); a = OP(0, b); s = a; break;
@@ -1088,16 +1262,8 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
         n->last_out = s;
         out[i] += (int32_t)(((int64_t)s * amp * VOICE_FS) >> 30);
         amp += damp;
-        for (k = 0; k < 4u; k++) {
-            uint32_t step = inc_delta[k];
-            inc_error[k] += inc_rem[k];
-            if (len > 1u && inc_error[k] >= len - 1u) {
-                inc_error[k] -= len - 1u;
-                step++;
-            }
-            inc_cur[k] = inc_down[k] ? inc_cur[k] - step : inc_cur[k] + step;
+        for (k = 0; k < 4u; k++)
             am_cur[k] += am_step[k];
-        }
     }
 }
 

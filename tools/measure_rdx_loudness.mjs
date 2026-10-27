@@ -2,12 +2,17 @@
 // Measure the loudest continuous 300 ms perceptual window during the first
 // second of every visible RDX preset.
 // The two-stage De Man K-weighting filter follows ITU-R BS.1770 at 44.1 kHz.
-// Usage: node tools/measure_rdx_loudness.mjs [felucca.wasm] [output.json] [--applied]
+// Usage: node tools/measure_rdx_loudness.mjs [felucca.wasm] [output.json] [--applied|--refine]
 import fs from "fs";
 
 const wasmPath = process.argv[2] || "build/emu/felucca.wasm";
 const outputPath = process.argv[3] || "build/rdx-loudness.json";
-const measureAppliedGain = process.argv.includes("--applied");
+const refineAppliedGain = process.argv.includes("--refine");
+const measureAppliedGain = process.argv.includes("--applied") || refineAppliedGain;
+const previousCalibration = refineAppliedGain && fs.existsSync(outputPath)
+  ? JSON.parse(fs.readFileSync(outputPath, "utf8"))
+  : null;
+const previousGainByName = new Map((previousCalibration?.presets || []).map((p) => [p.name, p.gainDb]));
 const bytes = fs.readFileSync(wasmPath);
 const sampleRate = 44100;
 const windowSeconds = 0.3;
@@ -172,12 +177,14 @@ const sorted = rows.map(x => x.rms).filter(x => x > 0).sort((a, b) => a - b);
 const targetRms = sorted[Math.floor(sorted.length / 2)];
 for (const row of rows) {
   const exact = row.rms > 0 ? 20 * Math.log10(targetRms / row.rms) : 24;
-  row.gainDb = Math.max(-24, Math.min(24, Math.round(exact)));
+  const correction = Math.round(exact);
+  const base = refineAppliedGain ? (previousGainByName.get(row.name) ?? 0) : 0;
+  row.gainDb = Math.max(-24, Math.min(24, base + correction));
   row.adjustedRms = row.rms * 10 ** (row.gainDb / 20);
 }
 
 const result = {
-  method: `${measureAppliedGain ? "Calibrated" : "Uncalibrated"} maximum ITU-R BS.1770 K-weighted RMS over a continuous 300 ms window during the first second of separate C3/C4/C5 notes at MIDI velocity 100 and MASTER ADC 700`,
+  method: `${refineAppliedGain ? "Iteratively refined calibrated" : measureAppliedGain ? "Calibrated" : "Uncalibrated"} maximum ITU-R BS.1770 K-weighted RMS over a continuous 300 ms window during the first second of separate C3/C4/C5 notes at MIDI velocity 100 and MASTER ADC 700`,
   weighting: "ITU-R BS.1770-5 K-weighting, De Man filters designed for 44100 Hz",
   windowSeconds,
   scanSeconds,

@@ -153,7 +153,13 @@ static void layer_arm(uint32_t pressed, uint32_t now)
         if (pressed & ly_bit(l)) {
             ui.ly = (uint8_t)l;
             ui.ly_t0 = (now & ~15u) | 1u | (layer_allowed() ? 0u : LY_DEAD);
-            lys.dtap = lys.dt_l == l && fm1_ms - lys.dt_ms <= LY_DTAP_MS;   /* (#83: the second tap of a double tap?) */
+            /* RDX keeps FX's long-hold quick layer, but a double tap is just
+             * two ordinary FX page taps and never locks MACROS/EFFECTS open. */
+            lys.dtap =
+#if FELUCCA_RDX
+                l != LAYER_FX &&
+#endif
+                lys.dt_l == l && fm1_ms - lys.dt_ms <= LY_DTAP_MS;
             lys.dt_l = 0;
             return;
         }
@@ -333,7 +339,11 @@ static void layer_tap(uint32_t l)
         ui.msg_t = 90;                                  /* ~1.5 s */
         lys.dt_hint = 1;
     }
-    if (!acted && !name_on() && !ui.confirm && !ui.menu) {   /* a page opened: a second tap soon locks the layer */
+    if (
+#if FELUCCA_RDX
+        l != LAYER_FX &&
+#endif
+        !acted && !name_on() && !ui.confirm && !ui.menu) { /* RDX FX deliberately has no double-tap lock */
         lys.dt_l = (uint8_t)l;
         lys.dt_ms = fm1_ms;
     }

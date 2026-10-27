@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- SPDX-License-Identifier: GPL-3.0-only
      Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments -->
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -63,45 +63,45 @@
 /*LIB*/
 const $ = (id) => document.getElementById(id);
 const TEXT = {
-  ja: {
-    intro: "Felucca-RDX をインストールする FM-1 を USB で接続してください。（Chrome か Edge で使えます）",
-    warn: "書き込み中は USB を抜かないでください。",
-    install: "インストール", other: "English",
-    cleanInstall: "新規インストール（ユーザーデータを消去）",
-    cleanWarn: "保存したプロジェクト、ユーザー音色、サンプル、自動保存、システム設定をすべて消去します。",
-    cleanConfirm: "新規インストールを実行します。保存したプロジェクト、ユーザー音色、サンプル、自動保存、システム設定はすべて消去されます。続けますか？",
-    editor: "エディタ（インストール後、パソコンから音色やシーケンスを編集）",
-    direct: "USB ケーブルはパソコンに直接つないでください。Probe や Transporter などの機材は不要です。",
-    brick: "万一インストールに失敗して起動しなくなった場合は、復旧に Transporter が必要です:",
-    beta: "Felucca-RDX は開発中のカスタムファームウェアです。不具合は GitHub で知らせてください。このファームウェアを使ったことで FM-1 が壊れたり不具合が起きたりしても、作者は一切の責任を負いません。自己責任でお使いください。",
-    back: "M-VAVEから公式FM-1 V15を取得し、未変更のFM-1.fwscを選んでください。ファイルはこのブラウザ内で検証し、サーバーへ送りません。",
-    stockTitle: "公式V15に戻す", stockFile: "公式FM-1.fwsc", stockGo: "バックアップして公式V15へ戻す",
-    stockBackup: "現在の曲・保存曲・音色バンク・サンプル・設定を先に保存します。全体バックアップ非対応版は、Felucca-RDXを更新してから行ってください。復元はFelucca-RDXを再インストールしてエディタから行います。",
-    stockRecovery: "更新中断の再開：全体バックアップはすでにパソコンへ保存済み",
-    stockValid: "公式V15を確認しました", stockConfirm: "全体バックアップファイルをパソコンに保存できましたか？ 続けると公式V15へ戻します。Felucca-RDXのデータは公式V15では開けません。",
-    stockNeedBackup: "書き込みモードからはバックアップできません。保存済みバックアップがある場合だけ、更新中断の再開にチェックしてください。",
-    stockUnsupported: "このFelucca-RDXは全体バックアップに未対応です。先に最新版をインストールしてください。",
-    backup: "全体バックアップ保存中 ", stockError: "公式ファイルを確認できません: ",
-    nomidi: "このブラウザでは使えません。Chrome か Edge で開いてください。", loadfail: "読み込めませんでした: ",
-    connect: "MIDI に接続中…", miditimeout: "MIDI の許可要求が応答しませんでした。アドレスバーのサイト設定で MIDI（SysEx）を許可し、MIDI を使う他のアプリやタブを閉じてから、もう一度押してください。",
-    start: "開始します", verify: "確認中", loader: "書き込みモードに切り替え中", write: "書き込み中",
-    reboot: "再起動中", done: "完了しました", stopped: "途中で止まりました。USB を挿し直してもう一度押してください。",
-    error: "エラー: ",
-    denied: "MIDI（SysEx）の使用が許可されませんでした。アドレスバーのサイト設定で MIDI を許可して、もう一度押してください。",
-    notfound: "FM-1 が見つかりません。USB ケーブル（データ通信用か）を確かめ、MIDI を使う他のアプリを閉じてから、もう一度押してください。",
-    model: "接続されている機器は FM-1 ではありません。",
-    lost: "USB の接続が切れました。挿し直してもう一度押してください。",
-    noloader: "書き込みモードの FM-1 が見つかりません。USB を挿し直してもう一度押してください（終わるまで書き込みモードのままです）。",
-    noreturn: "FM-1 が戻ってきません。電源を入れ直してください。",
-    mismatch: "書き込みは終わりましたが、FM-1 が別のバージョンを報告しています: ",
-    badpkg: "インストールするファイルが壊れています。ページを再読み込みしてください。",
-    leave: "書き込み中です。ページを閉じないでください。",
-    license: "GPL-3.0、無保証。ソース:",
+  zh: {
+    intro: "请通过 USB 连接要安装 Felucca-RDX 的 FM-1。（支持 Chrome 或 Edge。）",
+    warn: "写入固件时请勿拔出 USB 线。",
+    install: "安装", other: "English",
+    cleanInstall: "全新安装（清除所有用户数据）",
+    cleanWarn: "这会清除已保存的项目、用户音色、采样、自动保存数据和全部系统设置。",
+    cleanConfirm: "全新安装将清除已保存的项目、用户音色、采样、自动保存数据和全部系统设置。是否继续？",
+    editor: "编辑器（安装后可在电脑上管理音色和编辑参数）",
+    direct: "请将 USB 数据线直接连接到电脑，不需要 Probe 或 Transporter 等额外设备。",
+    brick: "如果安装失败并导致 FM-1 无法启动，需要使用 Transporter 恢复：",
+    beta: "Felucca-RDX 是仍在开发中的自定义固件。如发现问题，请在 GitHub 上反馈。使用本固件存在风险，作者不对由此造成的 FM-1 损坏或异常负责。",
+    back: "请从 M-VAVE 获取官方 FM-1 V15，并选择未经修改的 FM-1.fwsc。文件只在浏览器本地校验，不会上传到服务器。",
+    stockTitle: "恢复官方 V15", stockFile: "官方 FM-1.fwsc", stockGo: "备份并恢复官方 V15",
+    stockBackup: "恢复前会先保存当前音乐、已保存音乐、音色库、采样和设置。旧版固件需先更新 Felucca-RDX 才能进行完整备份。以后如需恢复，请重新安装 Felucca-RDX 并在编辑器中导入备份。",
+    stockRecovery: "继续上次中断的更新：完整备份已保存到本电脑",
+    stockValid: "已确认官方 V15 固件", stockConfirm: "完整备份文件是否已保存到本电脑？继续后将恢复官方 V15；官方 V15 无法读取 Felucca-RDX 数据。",
+    stockNeedBackup: "设备处于写入模式时无法导出备份。仅当完整备份已经保存时，才可勾选继续中断的更新。",
+    stockUnsupported: "当前 Felucca-RDX 版本不支持完整备份，请先安装最新版 Felucca-RDX。",
+    backup: "正在保存完整备份 ", stockError: "无法验证官方固件：",
+    nomidi: "当前浏览器不支持此功能，请使用 Chrome 或 Edge 打开。", loadfail: "载入失败：",
+    connect: "正在连接 MIDI…", miditimeout: "MIDI 权限请求没有响应。请在地址栏的网站设置中允许 MIDI（SysEx），关闭其他正在使用 MIDI 的应用或标签页，然后再次点击安装。",
+    start: "正在开始", verify: "正在校验", loader: "正在切换到写入模式", write: "正在写入",
+    reboot: "正在重新启动", done: "安装完成", stopped: "安装已中止。请重新插拔 USB 线，然后再次点击安装。",
+    error: "错误：",
+    denied: "未获得 MIDI（SysEx）权限。请在地址栏的网站设置中允许 MIDI，然后再次点击安装。",
+    notfound: "未找到 FM-1。请确认使用的是 USB 数据线，关闭其他正在使用 MIDI 的应用，然后再次点击安装。",
+    model: "已连接的设备不是 FM-1。",
+    lost: "USB 连接已断开。请重新插拔 USB 线，然后再次点击安装。",
+    noloader: "未找到处于写入模式的 FM-1。请重新插拔 USB 线，然后再次点击安装（完成前设备会保持写入模式）。",
+    noreturn: "FM-1 未能重新连接，请关闭电源后重新开机。",
+    mismatch: "固件已写入，但 FM-1 报告了不同的版本：",
+    badpkg: "安装文件已损坏，请重新载入页面。",
+    leave: "正在写入固件，请勿关闭页面。",
+    license: "GPL-3.0，且不提供任何担保。源代码：",
   },
   en: {
     intro: "Connect the FM-1 that will receive Felucca-RDX by USB. (Works in Chrome or Edge.)",
     warn: "Do not unplug the USB cable while writing.",
-    install: "Install", other: "日本語",
+    install: "Install", other: "中文",
     cleanInstall: "Fresh install (erase all user data)",
     cleanWarn: "Erases saved projects, user voices, samples, autosave data and all system settings.",
     cleanConfirm: "Fresh install will erase saved projects, user voices, samples, autosave data and all system settings. Continue?",
@@ -134,7 +134,7 @@ const TEXT = {
     license: "GPL-3.0, no warranty. Source:",
   },
 };
-let lang = (navigator.language || "en").toLowerCase().startsWith("ja") ? "ja" : "en";
+let lang = (navigator.language || "en").toLowerCase().startsWith("zh") ? "zh" : "en";
 const t = (k) => TEXT[lang][k];
 let lastKey = null, lastArg = "";
 function applyLang() {
@@ -143,7 +143,7 @@ function applyLang() {
   $("lang").textContent = t("other");
   if (lastKey) $("status").textContent = t(lastKey) + lastArg;
 }
-$("lang").addEventListener("click", () => { lang = lang === "ja" ? "en" : "ja"; applyLang(); });
+$("lang").addEventListener("click", () => { lang = lang === "zh" ? "en" : "zh"; applyLang(); });
 applyLang();
 const sayK = (k, arg = "") => { lastKey = k; lastArg = arg; $("status").textContent = t(k) + arg; };
 const say = (txt) => { lastKey = null; $("status").textContent = txt; };

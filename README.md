@@ -8,7 +8,7 @@ a modified fork of [Felucca](https://github.com/hugelton/Felucca) by Leo
 Kuroshita / Hügelton Instruments. The product UI exposes only the RDX
 instrument and its sound sets.
 
-The current firmware version is **Felucca RDX 0.6.15**. RDX is monotimbral: the
+The current firmware version is **Felucca RDX 1.0.0**. RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
@@ -21,9 +21,8 @@ Current features include:
 - Factory and Selected sound sets, including imported reface DX SysEx voices;
 - dual-core voice rendering with detailed timing and AUDIO LATE diagnostics;
 - an `FX1 -> FX2` serial stereo effects chain;
-- native Felucca Chorus, Delay and Hall algorithms;
-- a fixed-point stereo port of the Mutable Instruments Clouds reverb, with an
-  independent tail for each serial effect slot;
+- the Felucca full-rate Delay, a fixed-point stereo JIANT Chorus, and a
+  Q14 stereo port of the Mutable Instruments Clouds reverb exposed as Hall;
 - fixed-point PicoFaceDX Phaser-RDX and Flanger-RDX algorithms, with the
   original Felucca models retained for A/B comparison;
 - five MIDI velocity curves with Q8.8 velocity inside the RDX engine;
@@ -61,9 +60,9 @@ cd Felucca-RDX
 The default build enables both CPU cores. Use `-Cpu2 0` only when producing a
 single-core diagnostic build.
 
-The version is defined once in `firmware/src/rdx_version.h`. Increment its final
-component for every firmware delivered to hardware (`0.6.1`, `0.6.2`, ...,
-`0.6.15`); the splash, WebAssembly page and installer package use that value.
+The version is defined once in `firmware/src/rdx_version.h`. Release builds use
+semantic versioning; the splash, WebAssembly page and installer package all use
+that single value.
 
 `.github/workflows/pages.yml` builds the dual-core RDX firmware, assembles both
 web applications with `web/make_site.py`, and deploys `build/site` to GitHub

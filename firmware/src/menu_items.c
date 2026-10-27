@@ -14,7 +14,8 @@
  * GLO > SYSTEM), the values the project holds and saves as before (no format change; a project load brings its own);
  * nothing of theirs is in the settings record (MI_PROJECT: menu_get / menu_put read and write song.g) */
 enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_HOME, MI_HOLD, MI_ACCEL, MI_LATCH, MI_BPMLOCK, MI_SCLLED,
-       MI_PREVIEW, MI_CHADD, MI_SELECT, MI_LOWCUT, MI_USB,
+       MI_PREVIEW, MI_CHADD, MI_SELECT,
+       MI_LOWCUT, MI_USB,
        MI_CLICK, MI_CLKLVL, MI_COUNTIN, MI_TUNE,
 #if FELUCCA_RDX
        MI_PHSMODEL, MI_FLGMODEL,
@@ -114,7 +115,7 @@ static const uint8_t MI_TAB[MI_COUNT] = {
     MTAB_SYSTEM,                                                            /* 2ND CORE (1.6.1) */
 #endif
 #if FELUCCA_RDX
-    MTAB_SYSTEM, MTAB_SYSTEM,                                               /* RDX TYPE, MIDI velocity curve */
+    MTAB_SYSTEM, MTAB_SYSTEM,                                               /* renderer and MIDI velocity curve */
 #endif
     MTAB_SYSTEM, MTAB_SYSTEM, MTAB_SYSTEM,                                  /* CALIBRATION, INFO (1.2), ABOUT */
 };

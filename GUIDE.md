@@ -7,12 +7,12 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 0.6.13
+- 当前版本：Felucca RDX 1.0.0
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
 
-版本号只在 `firmware\src\rdx_version.h` 中维护。每次向真机交付一份新固件时递增最后一段版本号，例如 `0.6.1 -> 0.6.2 -> ... -> 0.6.13`。启动画面、模拟器和安装器会读取同一版本。
+版本号只在 `firmware\src\rdx_version.h` 中维护，并按语义化版本规则发布。启动画面、模拟器和安装器会读取同一版本。
 
 ## 编译固件
 
@@ -92,7 +92,8 @@ RDX 固件只有一个运行时轨道。ALGORITHM 旋钮不再切换轨道，MID
 `Poly`、`MonoFull`、`MonoLeg.` 三种 Reface DX 发声方式；`PORTA` 的范围为
 0–127；`GAIN` 的范围为 -24 到 +24 dB，并在加载 Factory/Selected 音色时
 使用 C3、C4、C5 起音后 1 秒内最响的连续 300 ms ITU-R BS.1770 K-weighted 感知
-响度标定默认值，使中高频、短促起音和慢起音都得到更符合听感的权重。用户修改后的 GAIN 会随工程或
+响度迭代标定默认值；校正会经过完整串行效果与最终限幅后复测，直到 1 dB 调整粒度内收敛，
+使中高频、短促起音和慢起音都得到更符合听感的权重。用户修改后的 GAIN 会随工程或
 用户音色保存。
 
 `KNOB 4` 的主移调 `Trans.` 范围为 -24 到 +24 半音，默认值为 0。`OCT-` 和
@@ -119,7 +120,7 @@ RDX 使用串行立体声 `FX1 -> FX2` 链。Phaser 和 Flanger 可在 `AUDIO` �
 `TYPE / SEND / TYPE / SEND`。名称与数值均使用小号字体，RDX 效果名称最多显示 6 个字符。TYPE 为
 `THRU` 时 SEND 显示 `-` 且旋钮不响应；对应的详情页用一张整行说明卡片代替四个空参数卡片。
 
-Reverb 可调 `TYPE / DEPTH / TIME / DAMP`，类型包括 `ROOM / SPRING / HALL / CLOUDS`。`CLOUDS` 是 Mutable Instruments Clouds 混响拓扑的 22.05 kHz 定点立体声移植，每个串行槽拥有独立尾音；本测试版本中，Factory、Selected 和新导入的 SysEx 音色只要包含 Reverb，默认类型均为 `CLOUDS`。Delay 可调 `DEPTH / TIME / FDBK / COLOR`。音色首次载入时，发送量按原有 RDX 映射生成：Chorus 为 20，Delay 由原 Depth 映射，Reverb 为原 Depth 除以 3。用户修改后的参数会随工程和用户音色保存。
+Reverb 可调 `TYPE / DEPTH / TIME / DAMP`，类型包括 `ROOM / SPRING / HALL`。当前 `HALL` 是 Mutable Instruments Clouds 拓扑的 Q14 定点立体声移植，每个串行槽拥有独立尾音。Delay 可调 `DEPTH / TIME / FDBK / COLOR`，其 SEND 卡片临时作为 0.1x–5.0x 湿声倍率。音色首次载入时，Chorus 的湿声量由原 Depth 除以 2，Reverb 由原 Depth 除以 2.5，Flanger 使用满额串行输入。用户修改后的参数会随工程和用户音色保存。
 
 ## 性能诊断
 

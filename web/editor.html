@@ -87,7 +87,13 @@
   .libcols .bar input[type=search] { flex: 1 1 120px; min-width: 0; }
   .list { height: 260px; overflow: auto; border: 1px solid var(--line); resize: vertical; }
   .list table { width: 100%; table-layout: fixed; }
+  .list table.resizable { min-width: 100%; }
   .list th { position: sticky; top: 0; background: var(--bg); padding: 1px 6px; }
+  .list th .col-resize { position: absolute; inset-block: 0; inset-inline-end: -4px; width: 8px; z-index: 2;
+    cursor: col-resize; touch-action: none; user-select: none; }
+  .list th .col-resize::after { content: ""; position: absolute; inset-block: 2px; inset-inline-start: 3px;
+    border-inline-start: 1px solid var(--line); }
+  .list th .col-resize:hover::after, .list th .col-resize.dragging::after { border-color: var(--fg); }
   .list td { padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .list tr[data-id], .list tr[data-slot] { cursor: pointer; }
   .list tr.sel td { background: var(--fg); color: var(--bg); }
@@ -96,6 +102,7 @@
   .list.over { outline: 1px solid var(--fg); }
   .list .none { padding: 6px; color: var(--dim); }
   .list col.n { width: 40px; } .list col.e { width: 72px; } .list col.d { width: 78px; }
+  .list table.libtable col.n { width: 80px; }
   .ic { font-family: "Fukiai"; font-style: normal; font-weight: 400; font-synthesis: none; line-height: 1; margin-right: .3em; }
   html:not(.fk) .ic { display: none; }
   /* wave choices: a page-drawn picker so the options can carry an icon (Chrome 135+); native menus get words only */
@@ -2536,7 +2543,11 @@ const ENGINE_ORDER = ["ANALOG", "FM6", "DIGITAL", "PHASE", "LOFI", "SAMPLE", "VO
   "SLICE", "DRUM"];
 function engineOrder(names) {
   const rank = (n) => { const k = ENGINE_ORDER.indexOf(n); return k < 0 ? ENGINE_ORDER.length : k; };
-  return (names || []).map((n, i) => i).filter((i) => names[i] !== "-")
+  /* A single-engine compatibility build can retain several historic ids which
+     all report the same engine name.  They are aliases, not separate engines;
+     keep the canonical last id (RDX/FM6 is persistent slot 12).  This also
+     protects users connected to firmware from before the protocol-side fix. */
+  return (names || []).map((n, i) => i).filter((i) => names[i] !== "-" && names.lastIndexOf(names[i]) === i)
     .sort((a, b) => rank(names[a]) - rank(names[b]) || a - b);
 }
 
@@ -4632,6 +4643,46 @@ let libSel = null, bankSel = null;
 let libBusy = false;           /* a library / bank operation is running */
 const LIB_PAGE_SIZE = 250;      /* thousands of imported voices must not become thousands of live DOM rows */
 let libPage = 0;
+const LIB_COL_DEFAULTS = [80, 176, 88, 144, 96];
+const LIB_COL_MINS = [64, 72, 64, 72, 72];
+let libColWidths = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem("felucca-rdx-library-columns") || "null");
+    return Array.isArray(v) && v.length === 5 && v.every(Number.isFinite) ?
+      v.map((x, i) => Math.max(LIB_COL_MINS[i], Math.round(x))) : LIB_COL_DEFAULTS.slice();
+  } catch (_) { return LIB_COL_DEFAULTS.slice(); }
+})();
+function sizeLibraryTable(table) {
+  [...table.querySelectorAll("col")].forEach((col, i) => { col.style.width = `${libColWidths[i]}px`; });
+  table.style.width = `${libColWidths.reduce((a, b) => a + b, 0)}px`;
+}
+function makeLibraryResizable(table) {
+  sizeLibraryTable(table);
+  const heads = [...table.querySelectorAll("tr:first-child th")];
+  heads.slice(0, -1).forEach((th, i) => {
+    const grip = el("span", { class: "col-resize", role: "separator", "aria-orientation": "vertical",
+      "aria-label": `${th.textContent} column width` });
+    grip.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const startX = e.clientX, startWidth = libColWidths[i];
+      grip.classList.add("dragging");
+      grip.setPointerCapture(e.pointerId);
+      const move = (ev) => {
+        libColWidths[i] = Math.max(LIB_COL_MINS[i], Math.round(startWidth + ev.clientX - startX));
+        sizeLibraryTable(table);
+      };
+      const done = (ev) => {
+        move(ev); grip.classList.remove("dragging");
+        try { localStorage.setItem("felucca-rdx-library-columns", JSON.stringify(libColWidths)); } catch (_) {}
+        grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", done);
+        grip.removeEventListener("pointercancel", done);
+      };
+      grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", done);
+      grip.addEventListener("pointercancel", done);
+    });
+    th.append(grip);
+  });
+}
 const newId = () => (self.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const nowIso = () => new Date().toISOString();
 const slotName = (i) => "U" + String(i + 1).padStart(2, "0");
@@ -4746,7 +4797,7 @@ function renderLib() {
   const box = $("liblist");
   if (!lib.length) box.replaceChildren(el("div", { class: "none", text: t("libEmpty") }));
   else {
-    const tb = el("table", {}, el("colgroup", {}, el("col", { class: "n" }), el("col"), el("col", { class: "e" }), el("col"), el("col", { class: "d" })),
+    const tb = el("table", { class: "libtable resizable" }, el("colgroup", {}, el("col", { class: "n" }), el("col"), el("col", { class: "e" }), el("col"), el("col", { class: "d" })),
       el("tr", {}, el("th", { text: t("number") }), el("th", { text: t("name") }), el("th", { text: t("engine") }), el("th", { text: t("tagsCol") }), el("th", { text: t("date") })));
     for (const p of v) {
       const tr = el("tr", { "data-id": p.id, class: p.id === libSel ? "sel" : null, draggable: "true", title: p.name },
@@ -4760,6 +4811,7 @@ function renderLib() {
       tr.addEventListener("dragstart", (e) => { libSel = p.id; e.dataTransfer.setData("text/x-felucca-lib", p.id); e.dataTransfer.effectAllowed = "copy"; });
       tb.append(tr);
     }
+    makeLibraryResizable(tb);
     box.replaceChildren(tb, ...(v.length ? [] : [el("div", { class: "none", text: t("noMatch") })]));
   }
   $("libcount").textContent = `${allv.length} / ${lib.length}` + (libPersistent ? "" : " " + t("noLibDB"));

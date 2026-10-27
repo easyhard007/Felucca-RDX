@@ -5,6 +5,7 @@ import fs from "fs";
 
 const bytes = fs.readFileSync(process.argv[2] || "build/emu/felucca.wasm");
 const versionHeader = fs.readFileSync("firmware/src/rdx_version.h", "utf8");
+const uiDrawSource = fs.readFileSync("firmware/src/ui_draw.c", "utf8");
 const versionMatch = versionHeader.match(/^#define RDX_VERSION "([^"]+)"$/m);
 if (!versionMatch) throw new Error("Cannot read RDX_VERSION from firmware/src/rdx_version.h");
 const expectedFirmwareVersion = `RDX ${versionMatch[1]}`;
@@ -62,12 +63,30 @@ const effected = await boot();
 const fxab = await boot();
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
 check("RDX firmware has one runtime track", d.ex.web_test_track_count() === 1);
+check("AUDIO LATE remains an INFO diagnostic without a giant popup",
+      !uiDrawSource.includes("draw_audio_late_notice"));
+check("RDX editor exposes only canonical engine slot 12",
+      d.ex.web_test_visible_engine_count() === 1 && d.ex.web_test_first_visible_engine() === 12);
 check("32 Factory and 21 Selected RDX voices are visible", d.ex.web_test_preset_total() === 53);
+let editorSlotsOk = true;
+const editorSlotNames = new Set();
+for (let shown = 0; shown < 53; shown++) {
+  const internal = d.ex.web_test_rdx_visible_preset(shown) >>> 0;
+  editorSlotsOk &&= internal !== 0xFFFFFFFF && (d.ex.web_test_rdx_visible_rank(internal) >>> 0) === shown;
+  const name = readIndexedString(d.ex, "web_test_rdx_preset_name_byte", internal);
+  editorSlotsOk &&= name.length > 0 && !editorSlotNames.has(name);
+  editorSlotNames.add(name);
+}
+check("Editor device presets map 53 unique visible slots bidirectionally", editorSlotsOk);
 check("RDX TYPE defaults to the optimized renderer", d.ex.web_test_rdx_type() === 1);
 d.ex.web_test_rdx_type_set(0);
 check("System RDX TYPE can switch back to the original renderer", d.ex.web_test_rdx_type() === 0);
 d.ex.web_test_rdx_type_set(1);
 check("System RDX TYPE can switch to the optimized renderer", d.ex.web_test_rdx_type() === 1);
+check("RDX HOME no longer exposes the obsolete CLOCK page",
+      d.ex.web_test_rdx_home_has_no_clock() === 1);
+check("RDX FX double tap no longer locks the MACROS/EFFECTS layer",
+      d.ex.web_test_rdx_fx_double_tap_disabled() === 1);
 check("PHS and FLG MODEL default to the fixed-point PicoFace RDX algorithms",
       d.ex.web_test_rdx_phaser_model() === 1 && d.ex.web_test_rdx_flanger_model() === 1);
 d.ex.web_test_rdx_phaser_model_set(0);
@@ -182,12 +201,12 @@ for (let gain = -24; gain <= 24; gain++) {
 check("GAIN preserves low-level samples and stays linear over -24..+24 dB", gainPrecisionOk);
 d.ex.web_test_rdx_gain_set(0);
 check("preset loads install their measured loudness calibration",
-      (d.ex.web_test_rdx_preset(0), d.ex.web_test_rdx_gain()) === 8 &&
-      (d.ex.web_test_rdx_preset(51), d.ex.web_test_rdx_gain()) === -5);
+      (d.ex.web_test_rdx_preset(0), d.ex.web_test_rdx_gain()) === 4 &&
+      (d.ex.web_test_rdx_preset(51), d.ex.web_test_rdx_gain()) === -6);
 check("old autosaves migrate from MLVL to the preset GAIN default",
-      d.ex.web_test_rdx_restore_gain(0, -17, 0) === 8);
+      d.ex.web_test_rdx_restore_gain(0, -17, 0) === 4);
 check("0.6.8/0.6.9 autosaves migrate to the new perceptual GAIN default",
-      d.ex.web_test_rdx_restore_previous_gain(0, -3) === 8);
+      d.ex.web_test_rdx_restore_previous_gain(0, -3) === 4);
 check("new autosaves preserve a user-edited GAIN",
       d.ex.web_test_rdx_restore_gain(0, -3, 1) === -3);
 check("RDX header is empty at octave zero and shows octave only when shifted",
@@ -203,20 +222,43 @@ check("sound-set registry contains Factory and Selected",
       d.ex.web_test_rdx_set_count() === 2 &&
       cstr(d.ex.web_test_rdx_set_name_byte, 0) === "Factory" &&
       cstr(d.ex.web_test_rdx_set_name_byte, 1) === "Selected");
-check("Factory set has 32 entries and excludes the three non-factory sounds",
-      d.ex.web_test_rdx_set_size(0) === 32 &&
-      d.ex.web_test_rdx_set_preset(0, 0) === 3 &&
-      cstr(d.ex.web_test_rdx_preset_name_byte, 3) === "DigiChord");
+const factoryOrder = [6, 7, 3, 4, 5, ...Array.from({length: 27}, (_, i) => i + 8)];
+check("Factory starts with LegendEP and DynaLead, then keeps the original order",
+      d.ex.web_test_rdx_set_size(0) === factoryOrder.length &&
+      factoryOrder.every((preset, at) => d.ex.web_test_rdx_set_preset(0, at) === preset) &&
+      cstr(d.ex.web_test_rdx_preset_name_byte, 6) === "LegendEP" &&
+      cstr(d.ex.web_test_rdx_preset_name_byte, 7) === "DynaLead");
+check("RDX release output is +6 dB and fresh installs default to VIOLET",
+      d.ex.web_test_rdx_master_mix_shift() === 1 &&
+      d.ex.web_test_rdx_default_palette() === 4);
 check("Selected set has 21 imported SysEx entries",
       d.ex.web_test_rdx_set_size(1) === 21 &&
       d.ex.web_test_rdx_set_preset(1, 0) === 35 &&
       cstr(d.ex.web_test_rdx_preset_name_byte, 35) === "Ph.D Brass" &&
       cstr(d.ex.web_test_rdx_preset_name_byte, 55) === "Transistor");
+d.ex.web_test_rdx_custom_name_load();
+check("a librarian audition publishes its live SysEx voice name on HOME",
+      cstr(d.ex.web_test_rdx_custom_name_byte, 0) === "Audition");
+const fmBrassAt = Array.from({length: d.ex.web_test_rdx_set_size(0)}, (_, i) => i)
+  .find(i => d.ex.web_test_rdx_set_preset(0, i) === 26);
+d.ex.web_test_rdx_preset(fmBrassAt);
+check("Factory FM_Brass restores Yamaha bulk Chorus and OP1 velocity bytes",
+      d.ex.web_test_rdx_patch_byte(32) === 3 && d.ex.web_test_rdx_patch_byte(55) === 72);
+check("FM_Brass PEG Rate1 reaches its -2-semitone target in a four-frame segment",
+      d.ex.web_test_rdx_fmbrass_peg_segments() === 0x204);
+d.ex.web_test_rdx_dry();
+d.ex.web_test_audio_flush();
+d.ex.web_midi(0x90, 60, 100);
+d.renderFrames(640);
+const fmBrassModAttack = d.ex.web_test_rdx_op_env_gain(1);
+check(`FM_Brass modulator attack rises linearly in audible gain (${fmBrassModAttack})`,
+      fmBrassModAttack > 14000 && fmBrassModAttack < 18000);
+d.ex.web_midi(0x80, 60, 0); d.render(1800);
 check("FX opens exactly FX, FX1, FX2, GLOBAL FX and SLICER in that order",
       d.ex.web_test_rdx_fx_page_count() === 5 &&
       ["FX", "FX1", "FX2", "GLOBAL FX", "SLICER"].every((name, i) =>
         cstr(d.ex.web_test_rdx_fx_page_name_byte, i) === name));
-d.ex.web_test_rdx_preset(2);                          // MotionPad: CHORUS -> DELAY
+d.ex.web_test_rdx_preset(4);                          // MotionPad: CHORUS -> DELAY
 check("preset FX bytes initialise the live serial type/send controls",
       d.ex.web_test_rdx_fx_live(0, 0) === 3 &&
       d.ex.web_test_rdx_fx_live(0, 1) === 15 &&
@@ -227,12 +269,12 @@ check("FX1 and FX2 parameter labels follow their selected effect types",
       cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(1, slot, pos), 2) === "FDBK" &&
       cstr((slot, pos) => d.ex.web_test_rdx_fx_param_label_byte(1, slot, pos), 3) === "COLOR");
 check("an old autosave cannot force DynaLead back to polyphony",
-      d.ex.web_test_rdx_restore_stale_voice(4) === 1);
+      d.ex.web_test_rdx_restore_stale_voice(1) === 1);
 const restoredLegend = d.ex.web_test_rdx_restore_stale_slot();
 check(`an old autosave PATCH mismatch reloads the current LegendEP data (0x${restoredLegend.toString(16)})`,
       restoredLegend === ((6 << 16) | (20 << 8) | 62));
 
-d.ex.web_test_rdx_preset(0);                          // DigiChord: FLANGER -> REVERB 59, 20
+d.ex.web_test_rdx_preset(2);                          // DigiChord: FLANGER -> REVERB 59, 20
 check("RDX Reverb Depth 59 maps to rounded Depth / 2.5 send 24",
       d.ex.web_test_rdx_reverb_send(1) === 24);
 check("RDX Reverb defaults to the Clouds-based HALL with 45% DAMP",
@@ -284,7 +326,7 @@ check("RDX Delay keeps Felucca's warm COLOR 70 default",
 check("RDX Delay TIME uses the measured full-rate 11.6 ms to 1201 ms range",
       d.ex.web_test_rdx_delay_samples(0) === 512 &&
       d.ex.web_test_rdx_delay_samples(127) === 52964);
-d.ex.web_test_rdx_preset(4);                          // DynaLead: Delay Depth 1, Time 74
+d.ex.web_test_rdx_preset(1);                          // DynaLead: Delay Depth 1, Time 74
 check("DynaLead Delay uses 1.0x ratio, audible base mix and zero feedback",
       d.ex.web_test_rdx_fx_live(0, 0) === 6 &&
       d.ex.web_test_rdx_fx_live(0, 1) === 10 &&
@@ -310,7 +352,7 @@ check("RDX Distortion level is unity at 0, gently raised at 5, and +30% at 100",
       d.ex.web_test_rdx_dist_target_q16(5) === 66519 &&
       d.ex.web_test_rdx_dist_target_q16(100) === 85197 &&
       d.ex.web_test_rdx_dist_target_q16(127) === 85197);
-d.ex.web_test_rdx_preset(0);                          // DigiChord: TIME 20 -> native fallback SIZE 30
+d.ex.web_test_rdx_preset(2);                          // DigiChord: TIME 20 -> native fallback SIZE 30
 d.ex.web_midi(0x90, 60, 100);
 d.renderFrames(128);
 check("a sounding RDX patch publishes the native-reverb fallback SIZE diagnostic",
@@ -349,8 +391,8 @@ for (let p = 0; p < 53; p++) {
 // One serial-chain example for every Reface effect type.  These run with the
 // native patch FX enabled; the engine-only loop above deliberately bypasses
 // them so a dark effect cannot masquerade as a silent oscillator patch.
-for (const [p, label] of [[0, "flanger/reverb"], [1, "distortion/delay"],
-                          [2, "chorus/delay"], [8, "phaser/chorus"],
+for (const [p, label] of [[2, "flanger/reverb"], [3, "distortion/delay"],
+                          [4, "chorus/delay"], [8, "phaser/chorus"],
                           [17, "flanger/delay"], [32, "reverb/reverb"],
                           [36, "distortion/touch wah"], [42, "reverb/reverb"],
                           [51, "reverb/distortion"]]) {
@@ -358,7 +400,7 @@ for (const [p, label] of [[0, "flanger/reverb"], [1, "distortion/delay"],
   effected.ex.web_test_audio_flush();
   effected.ex.web_midi(0x90, 60, 100);
   const audio = effected.renderFrames(128 * 120);
-  if (p === 2) {
+  if (p === 4) {
     check("RDX Chorus maps MotionPad Depth 30 to SEND 15",
           effected.ex.web_test_rdx_chorus_send() === 15);
     check("RDX Chorus halves MotionPad DEPTH 30 while keeping RATE 74",

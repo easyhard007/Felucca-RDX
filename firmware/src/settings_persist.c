@@ -72,7 +72,9 @@ static int settings_import(persist_t *p, int n)
     if (old1 || old2) p->bold = 0;
     if (!current) memset(&p->favorites, 0, sizeof p->favorites);
 #if FELUCCA_FM6_ONLY
-    if (p->favorites.factory[15][13] != FM6_ONLY_SETTINGS_TAG) {
+    /* 0.6.35..0.6.38 briefly used the high two bits for the retired EG A/B
+     * choice.  Ignore those bits so upgrading does not reset preset filters. */
+    if ((p->favorites.factory[15][13] & 0x3Fu) != (FM6_ONLY_SETTINGS_TAG & 0x3Fu)) {
         fm6_only_migrate = 1;
     }
 #endif

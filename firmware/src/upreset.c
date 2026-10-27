@@ -236,7 +236,7 @@ static int up_parse(const uint8_t *a, uint32_t na, up_rec_t *r, uint32_t *slot)
     memset(r, 0, sizeof *r);
     r->used = UP_USED;
     r->ver = UP_VER;
-    r->engine = a[1];
+    r->engine = FELUCCA_FM6_ONLY ? ENGI_FM6 : a[1];
     r->np = P_COUNT;
     for (i = 0; i < n; i++)
         r->name[i] = (char)a[2 + i];
@@ -410,7 +410,7 @@ static int up_store_cat(uint32_t k, const char *name, uint32_t cat)
     memset(&r, 0, sizeof r);
     r.used = UP_USED;
     r.ver = UP_VER;
-    r.engine = TSEL->eng_req;
+    r.engine = FELUCCA_FM6_ONLY ? ENGI_FM6 : TSEL->eng_req;
     r.np = P_COUNT;
     up_set_name(&r, k, name);
     for (i = 0; i < P_COUNT; i++)
@@ -485,7 +485,7 @@ static int up_load(uint32_t k)
 #endif
     {
         fm1_irq_off();                                  /* the audio ISR must not see half a sound */
-        t->eng_req = r->engine;
+        t->eng_req = FELUCCA_FM6_ONLY ? ENGI_FM6 : r->engine;
         for (i = 0; i < P_COUNT; i++)
             if (!param_kept(i))
                 t->p[i] = v[i];

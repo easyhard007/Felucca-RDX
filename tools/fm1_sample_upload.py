@@ -16,6 +16,7 @@ Needs mido (and a backend such as python-rtmidi) for the device commands.
 """
 import sys
 import time
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -28,6 +29,12 @@ RC = {1: "size", 2: "header", 3: "data CRC", 4: "flash", 5: "zones"}
 def printable(b):
     """bytes from the device as text for the terminal: printable ASCII only (no escape sequences)"""
     return "".join(chr(c) if 32 <= c < 127 else "?" for c in b)
+
+
+def terminal_text(s):
+    """Keep diagnostics printable on legacy Windows console encodings."""
+    encoding = sys.stdout.encoding or "utf-8"
+    return str(s).encode(encoding, errors="replace").decode(encoding)
 
 
 def slot_info(r):
@@ -91,10 +98,14 @@ def build(name, specs):
     """specs: "file.wav[:ROOT[:LO-HI]]" -> (header, ADPCM data) for SMP_END / SMP_WRITE"""
     zones = []
     for spec in specs:
-        parts = spec.split(":")
-        path = Path(parts[0])
-        root = int(parts[1]) if len(parts) > 1 and parts[1] else sio.note_from_name(path.stem)
-        lo, hi = (int(v) for v in parts[2].split("-")) if len(parts) > 2 else (None, None)
+        # Parse optional numeric suffixes from the right.  Splitting on every
+        # colon mistakes a Windows drive prefix (C:\\...) for ROOT.
+        ranged = re.match(r"^(.*):(\d*):(\d+)-(\d+)$", spec)
+        rooted = re.match(r"^(.*):(\d+)$", spec) if not ranged else None
+        path = Path(ranged.group(1) if ranged else rooted.group(1) if rooted else spec)
+        root_text = ranged.group(2) if ranged else rooted.group(2) if rooted else ""
+        root = int(root_text) if root_text else sio.note_from_name(path.stem)
+        lo, hi = (int(ranged.group(3)), int(ranged.group(4))) if ranged else (None, None)
         sr, x = sio.read_any_wav(path)
         x = sio.resample(x, sr, sio.SLOT_RATE)
         if not x:
@@ -117,7 +128,7 @@ def main():
         if cmd == "build":
             Path(sys.argv[3] + ".hdr").write_bytes(hdr)
             Path(sys.argv[3] + ".bin").write_bytes(data)
-            print(f"{sys.argv[2]}: {len(data)} B ADPCM, {hdr[6]} zones")
+            print(f"{terminal_text(sys.argv[2])}: {len(data)} B ADPCM, {hdr[6]} zones")
             return
     if cmd != "info":
         if len(sys.argv) < 3 or sys.argv[2] not in ("1", "2", "3"):
@@ -133,7 +144,7 @@ def main():
     if cmd == "erase":
         print("erase:", "ok" if link.req(14, [slot], 10)[1] == 0 else "FAILED")
         return
-    print(f"USR{slot + 1} {sys.argv[3]}: {len(data)} B ADPCM, {hdr[6]} zones")
+    print(f"USR{slot + 1} {terminal_text(sys.argv[3])}: {len(data)} B ADPCM, {hdr[6]} zones")
     if link.req(11, [slot])[1]:
         sys.exit("begin failed")
     t0 = time.time()

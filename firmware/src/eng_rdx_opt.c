@@ -10,7 +10,7 @@ typedef struct {
     rdx_note_t *note;
     int32_t *out;
     uint32_t (*env)[CTL];
-    uint32_t len, norm;
+    uint32_t len, offset, norm;
     uint32_t fb_scale[4];
     uint32_t inc[4], inc_delta[4], inc_rem[4], inc_error[4];
     int32_t am[4], am_step[4];
@@ -65,16 +65,23 @@ static uint32_t rdx_opt_env_segments(rdx_op_t *o, const rdx_op_param_t *p,
         count = to_target < len - pos ? to_target : len - pos;
         for (j = 0; j < count; j++) {
             uint32_t hit = j + 1u == to_target;
+            uint32_t gain;
             if (hit) {
                 o->env = o->target;
+                o->rise_gain_q16 = rdx_gain(o->env) << 16;
+                gain = rdx_gain(o->env);
                 rdx_env_next(o, p, gate, o->rate_offset, rate_macro);
                 if (o->stage == RDX_IDLE && idle_after == len)
                     idle_after = pos;
-            } else if (o->rising)
+            } else if (o->rising) {
                 o->env += o->step;
-            else
+                o->rise_gain_q16 += o->rise_step_q16;
+                gain = (o->rise_gain_q16 + 32768u) >> 16;
+            } else {
                 o->env -= o->step;
-            dst[pos++] = rdx_gain(o->env);
+                gain = rdx_gain(o->env);
+            }
+            dst[pos++] = gain;
         }
     }
     return idle_after;
@@ -136,7 +143,7 @@ static __attribute__((always_inline)) int32_t rdx_opt_hot_op(rdx_opt_ctl_t *c,
 {
     rdx_op_t *o = &c->note->op[k];
     int32_t f, wave, s;
-    uint32_t step;
+    uint32_t step, gi = c->offset + i;
     if (!((c->enable_mask >> k) & 1u))
         return 0;
     f = o->fb;
@@ -148,7 +155,7 @@ static __attribute__((always_inline)) int32_t rdx_opt_hot_op(rdx_opt_ctl_t *c,
     o->ph += c->inc[k];
     o->fb = wave;
     s = (int32_t)(((int64_t)wave * (int32_t)o->out_gain) >> 15);
-    s = (int32_t)(((int64_t)s * c->env[k][i]) >> 15);
+    s = (int32_t)(((int64_t)s * c->env[k][gi]) >> 15);
     if ((c->amd_mask >> k) & 1u)
         s = mulq15(s, c->am[k]);
     step = c->inc_delta[k];
@@ -166,6 +173,7 @@ static __attribute__((always_inline)) void rdx_opt_hot_post(rdx_opt_ctl_t *c,
                                                              uint32_t i, int32_t s)
 {
     rdx_note_t *n = c->note;
+    uint32_t gi = c->offset + i;
     s = mulq16(s, c->norm << 1);
     { int32_t x = s - n->dc; n->dc += x >> 10; s = x; }
     if (n->transition_pending) {
@@ -177,8 +185,8 @@ static __attribute__((always_inline)) void rdx_opt_hot_post(rdx_opt_ctl_t *c,
         s += mulq16(n->correction, (uint32_t)n->correction_left << 9);
         n->correction_left--;
     }
-    if (i >= c->tail_start) {
-        uint32_t used = i - c->tail_start;
+    if (gi >= c->tail_start) {
+        uint32_t used = gi - c->tail_start;
         uint32_t left = c->tail_base > used ? c->tail_base - used : 0u;
         s = left ? mulq16(s, left << 8) : 0;
     }
@@ -235,8 +243,10 @@ static __attribute__((noinline)) void rdx_render_optimized(track_t *t, voice_t *
     const rdx_patch_t *p;
     uint32_t env[4][CTL];
     rdx_opt_ctl_t c;
-    uint32_t i, k, alg;
-    int32_t fb_macro, lfo0, lfo1, peg0, peg1;
+    rdx_peg_segment_t peg_seg[RDX_PEG_SEGMENTS];
+    uint32_t k, alg, peg_n, s, offset, block_span;
+    int32_t sem_first[4], sem_last[4], am_first[4];
+    int32_t fb_macro, lfo0, lfo1;
     int32_t pitch0, pitch1, target, ext_pitch, mw0, mw1;
     if (!n || !n->live)
         return;
@@ -250,6 +260,7 @@ static __attribute__((noinline)) void rdx_render_optimized(track_t *t, voice_t *
     c.out = out;
     c.env = env;
     c.len = len;
+    c.offset = 0u;
     c.norm = n->norm;
     c.enable_mask = n->enable_mask;
     c.fb_type_mask = n->fb_type_mask;
@@ -281,10 +292,7 @@ static __attribute__((noinline)) void rdx_render_optimized(track_t *t, voice_t *
     }
     pitch1 = n->pitch;
     ext_pitch = (m->pitch16 - v->pitch_cur) * 4096 + m->fine * 277;
-    peg0 = n->peg - (64 << 16);
-    for (i = 0; i < len; i++)
-        rdx_peg_tick(n);
-    peg1 = n->peg - (64 << 16);
+    peg_n = rdx_peg_prepare(n, len, peg_seg);
     rdx_lfo_block(n, len, &lfo0, &lfo1);
     mw0 = lfo0 * t->mw / 127;
     mw1 = lfo1 * t->mw / 127;
@@ -292,22 +300,12 @@ static __attribute__((noinline)) void rdx_render_optimized(track_t *t, voice_t *
         int32_t pm0 = (int32_t)(((int64_t)lfo0 * n->pm_depth) >> 15);
         int32_t pm1 = (int32_t)(((int64_t)lfo1 * n->pm_depth) >> 15);
         int32_t sem0, sem1, a0 = 32768, a1 = 32768;
-        uint32_t end, span = len > 1u ? len - 1u : 1u, distance;
         if (!((n->pmd_mask >> k) & 1u))
             pm0 = pm1 = 0;
         sem0 = pitch0 - n->base_pitch + ext_pitch + pm0 + mw0 * 2;
         sem1 = pitch1 - n->base_pitch + ext_pitch + pm1 + mw1 * 2;
-        if ((n->peg_mask >> k) & 1u) {
-            sem0 += peg0;
-            sem1 += peg1;
-        }
-        c.inc[k] = rdx_inc_mod(n->op[k].inc, sem0);
-        end = rdx_inc_mod(n->op[k].inc, sem1);
-        c.inc_down[k] = end < c.inc[k];
-        distance = c.inc_down[k] ? c.inc[k] - end : end - c.inc[k];
-        c.inc_delta[k] = distance / span;
-        c.inc_rem[k] = distance % span;
-        c.inc_error[k] = 0u;
+        sem_first[k] = sem0;
+        sem_last[k] = sem1;
         if ((n->amd_mask >> k) & 1u) {
             uint32_t depth = n->am_depth[k];
             a0 += (int32_t)(((int64_t)depth * (lfo0 * 2 - 32768)) >> 15) - mw0;
@@ -315,12 +313,42 @@ static __attribute__((noinline)) void rdx_render_optimized(track_t *t, voice_t *
             a0 = clamp(a0, 0, 65536);
             a1 = clamp(a1, 0, 65536);
         }
-        c.am[k] = a0;
+        am_first[k] = a0;
         c.am_step[k] = len > 1u ? (a1 - a0) / (int32_t)(len - 1u) : 0;
         c.fb_scale[k] = n->fb_scale[k];
     }
-    c.amp = m->amp0;
     c.damp = len > 1u ? (m->amp1 - m->amp0) / (int32_t)(len - 1u) : 0;
     rdx_opt_envelopes(&c, p, t->p[P_E4]);
-    RDX_OPT_KERNEL[alg](&c);                   /* indirect: XIP and fast SRAM exceed call range */
+    block_span = len > 1u ? len - 1u : 1u;
+    offset = 0u;
+    for (s = 0; s < peg_n && offset < len; s++) {
+        uint32_t frames = peg_seg[s].frames;
+        uint32_t segment_span, end, distance;
+        if (frames > len - offset)
+            frames = len - offset;
+        segment_span = frames > 1u ? frames - 1u : 1u;
+        c.out = out + offset;
+        c.offset = offset;
+        c.len = frames;
+        c.amp = m->amp0 + c.damp * (int32_t)offset;
+        for (k = 0; k < 4u; k++) {
+            int32_t a = rdx_lerp_s32(sem_first[k], sem_last[k], offset, block_span);
+            int32_t b = rdx_lerp_s32(sem_first[k], sem_last[k],
+                                     offset + frames - 1u, block_span);
+            if ((n->peg_mask >> k) & 1u) {
+                a += peg_seg[s].first;
+                b += peg_seg[s].last;
+            }
+            c.inc[k] = rdx_inc_mod(n->op[k].inc, a);
+            end = rdx_inc_mod(n->op[k].inc, b);
+            c.inc_down[k] = end < c.inc[k];
+            distance = c.inc_down[k] ? c.inc[k] - end : end - c.inc[k];
+            c.inc_delta[k] = distance / segment_span;
+            c.inc_rem[k] = distance % segment_span;
+            c.inc_error[k] = 0u;
+            c.am[k] = am_first[k] + c.am_step[k] * (int32_t)offset;
+        }
+        RDX_OPT_KERNEL[alg](&c);               /* indirect: XIP and fast SRAM exceed call range */
+        offset += frames;
+    }
 }

@@ -121,8 +121,58 @@ static int ed_smp_end(uint32_t k, const uint8_t *a, uint32_t na)
     return usr_nz[k] ? 0 : 5;
 }
 
+/* The single-engine build retains all historic engine ids in saved formats,
+ * but the editor must expose only the one engine that can actually be selected.
+ * Canonicalising here also repairs a track left on an alias id by an older
+ * editor: RDX-specific patch loading requires ENGI_RDX, not merely an ENGINES[]
+ * entry which happens to point at ENG_RDX. */
+static uint32_t ed_engine_from_device(uint32_t engine)
+{
+#if FELUCCA_FM6_ONLY
+    (void)engine;
+    return ENGI_FM6;
+#else
+    return engine < NENGINES ? engine : 0u;
+#endif
+}
+
 /* the engine byte of DUMP / RELOAD / TRACK */
-static uint32_t ed_eng(const track_t *t) { return t->eng_req % NENGINES; }
+static uint32_t ed_eng(const track_t *t) { return ed_engine_from_device(t->eng_req % NENGINES); }
+
+/* The RDX patch table deliberately keeps a few retired/source patches so old
+ * saved data remains readable.  The front panel skips those entries, therefore
+ * the editor must not expose the raw table index as a device preset slot.  Keep
+ * every editor-facing command on the same compact, visible numbering and only
+ * translate at the firmware boundary. */
+static uint32_t ed_preset_count(uint32_t engine)
+{
+    if (engine >= NENGINES || !eng_ok(engine))
+        return 0u;
+#if FELUCCA_RDX
+    if (ENGINES[engine] == &ENG_RDX)
+        return RDX_NPRESETS;
+#endif
+    return ENGINES[engine]->npresets;
+}
+static uint32_t ed_preset_from_device(uint32_t engine, uint32_t shown)
+{
+#if FELUCCA_RDX
+    if (engine < NENGINES && ENGINES[engine] == &ENG_RDX)
+        return rdx_visible_preset(shown % RDX_NPRESETS);
+#endif
+    return shown;
+}
+static uint32_t ed_preset_to_device(const track_t *t)
+{
+    uint32_t engine = ed_eng(t), preset = t->preset;
+#if FELUCCA_RDX
+    if (ENGINES[engine] == &ENG_RDX) {
+        preset = preset_orig(&ENG_RDX, preset % RDX_NPATCHES);
+        return preset_rank(&ENG_RDX, preset);
+    }
+#endif
+    return preset;
+}
 
 /* ---- live sync (v2): while the editor WATCHes, device-side changes are pushed.
  * Shadows of the selected track's p[] + song.g[] and of its steps are kept in step
@@ -220,7 +270,7 @@ static void ed_sync(void)                                /* main loop */
         ed_shadow();
         ed_begin(ED_RELOAD);
         ed_b(ed_eng(TSEL));
-        ed_b(TSEL->preset);
+        ed_b(ed_preset_to_device(TSEL));
         ed_b(song.sel);
         ed_send();
         return;
@@ -480,7 +530,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_b(NSTEP);
         ed_b(P_E0);
         for (i = 0; i < NENGINES; i++)
-            ed_str(ENGINES[i]->name, 8);
+            ed_str(eng_ok(i) ? ENGINES[i]->name : "-", 8);
         ed_b(NTRK);                                       /* v3 */
         ed_b(CHAIN_ROWS);                                  /* v6 */
         ed_b(0x55); ed_b(1); ed_b(ed_ui_caps());             /* tagged preferences v1: commands 34..38 */
@@ -513,7 +563,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
                                                            * DIGITAL's first preset, as FM6) */
                 ed_load_t b;
                 ed_load_before(&b);
-                set_engine((uint32_t)clamp(ed_rv(a + 2), 0, NENGINES - 1));
+                set_engine(ed_engine_from_device((uint32_t)clamp(ed_rv(a + 2), 0, NENGINES - 1)));
                 ed_load_after(&b);
             } else if (d->max > d->min) {
                 int16_t old = *vp;
@@ -545,7 +595,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         for (i = 0; i < ED_NV; i++)                       /* the editor gets them all here */
             ed_w.v[i] = *ed_val(i);
         ed_b(ed_eng(TSEL));
-        ed_b(TSEL->preset);
+        ed_b(ed_preset_to_device(TSEL));
         for (i = 0; i < P_COUNT; i++)
             ed_v(motion_base_value(TSEL, i));
         for (i = 0; i < G_COUNT; i++)
@@ -582,23 +632,25 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
     }
     case ED_PRESET: {                                      /* engine, preset */
         ed_load_t b;
+        uint32_t engine;
         if (na < 2u || a[0] >= NENGINES)
             return;
+        engine = ed_engine_from_device(a[0]);
         ed_load_before(&b);
 #if !FELUCCA_FM4
-        if (a[0] == ENGI_DIGITAL)                          /* a DIGITAL preset (retired): its sound, as FM6 */
+        if (engine == ENGI_DIGITAL)                        /* a DIGITAL preset (retired): its sound, as FM6 */
             fm4_load_preset(TSEL, a[1]);
         else
 #endif
         {
-            if (a[0] != TSEL->eng_req)
-                set_engine(a[0]);
-            apply_preset(a[1]);
+            if (engine != TSEL->eng_req)
+                set_engine(engine);
+            apply_preset(ed_preset_from_device(engine, a[1]));
         }
         ed_load_after(&b);
         ui.force = 1;
         ed_b(ed_eng(TSEL));
-        ed_b(TSEL->preset);
+        ed_b(ed_preset_to_device(TSEL));
         break;
     }
     case ED_PROJECT:                                       /* 0 = load, 1 = save, 2 = query; slot 0..3 */
@@ -618,9 +670,9 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         if (na < 1u || a[0] >= NENGINES)
             return;
         ed_b(a[0]);
-        ed_b(ENGINES[a[0]]->npresets);
-        for (i = 0; i < ENGINES[a[0]]->npresets; i++)
-            ed_str(ENGINES[a[0]]->presets[i].name, 12);
+        ed_b(ed_preset_count(a[0]));
+        for (i = 0; i < ed_preset_count(a[0]); i++)
+            ed_str(ENGINES[a[0]]->presets[ed_preset_from_device(a[0], i)].name, 12);
         for (i = 0; i < 2u; i++)                           /* then the two edit-page titles */
             ed_str(ENGINES[a[0]]->page_title[i], 8);
         break;
@@ -717,7 +769,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             for (j = 0; u && j < 12u; j++)
                 nm[j] = up_rec(i)->name[j];
             ed_b(u);
-            ed_b(u ? up_rec(i)->engine : 0u);
+            ed_b(u ? up_engine(i) : 0u);
             ed_str(nm, 12);
         }
         for (i = s0; i < s0 + cnt; i++)
@@ -741,7 +793,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             nm[i] = r->name[i];
         ed_b(a[0]);
         ed_b(u);
-        ed_b(u ? r->engine : 0u);
+        ed_b(u ? up_engine(a[0]) : 0u);
         ed_str(nm, 12);
         for (i = 0; i < P_COUNT; i++)
             ed_v(u ? v[i] : 0);
@@ -834,7 +886,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
         ed_b(NTRK);
         for (i = 0; i < NTRK; i++) {
             ed_b(ed_eng(&trk[i]));
-            ed_b(trk[i].preset);
+            ed_b(ed_preset_to_device(&trk[i]));
             ed_v(trk[i].p[P_LEVEL]);
             ed_b(trk[i].p[P_MUTE] != 0);
             ed_b((song.rec >> i) & 1u);
@@ -864,7 +916,7 @@ static void ed_handle(const uint8_t *f, uint32_t n)   /* f: the bytes between F0
             return;
         ed_b(a[0]);
         ed_b(ed_eng(&trk[a[0]]));
-        ed_b(trk[a[0]].preset);
+        ed_b(ed_preset_to_device(&trk[a[0]]));
         for (i = 0; i < P_COUNT; i++)
             ed_v(motion_base_value(&trk[a[0]], i));
         break;
