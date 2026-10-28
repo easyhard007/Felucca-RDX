@@ -957,6 +957,19 @@ static void draw_foot(void)
         int32_t kw = kh_w(KC_OCTUP, "DONE");
         cv_free_text(8, 2, &AF_S, ln, T_ACCENT, T_BG, 232 - kw - 8 - 8);
         cv_key_row(232 - kw, 232, 2, &kh, 1, 1u, T_BG);
+    } else if (!ui.home && pg->fam == FAM_EDIT &&
+               pg->graph >= GR_RDX_ALG && pg->graph <= GR_RDX_FREQ) {
+        /* RDX EDIT keeps SAVE's two-line footer: controls on row 1, while
+         * row 2 below still identifies engine, voice and page. */
+        khint_t kh[2];
+        if (pg->graph == GR_RDX_ALG)
+            kh[0] = (khint_t){KC_ALGO, "CHANGE"};
+        else if (pg->graph == GR_RDX_EG)
+            kh[0] = (khint_t){KC_SELECT, "OP / LEVEL"};
+        else
+            kh[0] = (khint_t){KC_SELECT, "ROW"};
+        kh[1] = (khint_t){KC_EDIT, "NEXT"};
+        cv_key_row(8, 232, 2, kh, 2, 3u, T_BG);
     } else if (grid_on() && !detail_on()) {          /* row 1: the page, and what the keys do (DETAIL: the steps) */
         char b[16];
         uint32_t len = (uint32_t)t->p[P_SLEN];
@@ -1075,23 +1088,32 @@ static void draw_rdx_fx_overview(void)
     for (c = 0; c < 4u; c++) {
         int16_t *vp;
         const param_desc_t *d = page_desc(cur_page(), c, &vp);
-        int32_t x = (int32_t)c * 59, w;
+        uint32_t slot = c >> 1, type = rdx_fx_type_of(TSEL, slot);
+        int fixed_send = type == RFX_FLANGER;
+        int32_t x, cw, w;
         uint16_t lc = c == ui.hot_col && ui.hot_t ? T_ACCENT : T_MID;
         uint16_t vc = c == ui.hot_col && ui.hot_t ? T_ACCENT : T_THEME;
-        cv_rrect(x, 16, CARD_W, 28, 4, T_SURF, T_BG);
-        GFX_HOOK_ALIGN(x, 16, x + CARD_W, 30, AL_H, "RDX FX card label centred");
-        cv_text_in(x, 16, CARD_W, &AF_S, d->label, lc, T_SURF);
+        if ((c & 1u) && fixed_send) {             /* fixed at unity: no fake editable SEND card */
+            ui.roll[c].from[0] = 0;
+            ui.col[c][0] = 0;
+            continue;
+        }
+        x = (int32_t)slot * 118 + ((c & 1u) ? 59 : 0);
+        cw = fixed_send ? 116 : CARD_W;
+        cv_rrect(x, 16, cw, 28, 4, T_SURF, T_BG);
+        GFX_HOOK_ALIGN(x, 16, x + cw, 30, AL_H, "RDX FX card label centred");
+        cv_text_in(x, 16, cw, &AF_S, d->label, lc, T_SURF);
         str_cpy(shown, val[c], sizeof shown);
         if (unit[c][0]) {
             str_cpy(shown + str_len(shown), " ", sizeof shown - str_len(shown));
             str_cpy(shown + str_len(shown), unit[c], sizeof shown - str_len(shown));
         }
         w = ink_w(&AF_S, shown);
-        GFX_HOOK_ALIGN(x, 29, x + CARD_W, 43, AL_HV, "RDX FX card value centred in small face");
-        if (w <= CARD_W - 4)
-            cv_text_in(x, 28, CARD_W, &AF_S, shown, vc, T_SURF);
+        GFX_HOOK_ALIGN(x, 29, x + cw, 43, AL_HV, "RDX FX card value centred in small face");
+        if (w <= cw - 4)
+            cv_text_in(x, 28, cw, &AF_S, shown, vc, T_SURF);
         else
-            cv_text_fit(x + 2, 28, &AF_S, shown, vc, T_SURF, CARD_W - 4);
+            cv_text_fit(x + 2, 28, &AF_S, shown, vc, T_SURF, cw - 4);
         ui.roll[c].from[0] = 0;
         ui.col[c][0] = 0;
     }
@@ -1308,9 +1330,17 @@ static void draw_columns(void)
         str_cpy(u, "/", 8);
         fmt_int(u + 1, (int32_t)total);
         draw_column(0, "No.", val, u, VAL(0u), -1, ICON_NONE);
+        #if FELUCCA_RDX
+        draw_column(1, "LIST", rdx_list_name(rdx_list_filter), "", VAL(1u), -1, ICON_X_FOLDER);
+        #else
         draw_column(1, "ENG", ENGINES[TSEL->eng_req]->name, "", VAL(1u), -1, engine_icon(ENGINES[TSEL->eng_req]->name));
+        #endif
         draw_column(2, "FAV", preset_favorite() ? "ON" : "OFF", "", VAL(2u), -1, ICON_X_STAR);
+        #if FELUCCA_RDX
+        draw_column(3, "TYPE", list_name(list_mode()), "", VAL(3u), -1, ICON_AUTO);
+        #else
         draw_column(3, "LIST", list_name(list_mode()), "", VAL(3u), -1, ICON_X_FOLDER);
+        #endif
         return;
     }
     if (cur_page()->graph == GR_PATS) {                  /* PAT, then LOAD (a GO button) */
@@ -1520,14 +1550,53 @@ static void draw_columns(void)
 }
 
 
-/* The power-on splash (main.c fm1_main, web/emu felucca_web.c; 1.1.5): a RAISE square centred on the screen, square
- * corners (in every style; LINE too: RAISE from the palette's SURF), in it in AF_M, the ink SPL_PAD in from the left:
- * at the top the name and the version, the first line's capitals' top SPL_PAD down; at the bottom the maker and
- * "with community", the last line's capitals' bottom (its baseline) SPL_PAD up from the square's bottom. Both
- * margins are measured to the capitals (the descender of "community" hangs into the bottom one, as off a baseline).
- * The square (176 x 176) is more than the canvas (CV_MAX, 240 x 124): it is filled straight on the screen and its
- * two text bands drawn on it as canvases, the top one from the square's top edge, the bottom one to its bottom edge.
- * In the saved palette (settings_init before it) */
+/* The power-on splash (main.c fm1_main, web/emu felucca_web.c).  RDX has its own compact identity screen: the four
+ * nodes are its four FM operators (three round modulators feeding a square carrier), followed by the product name,
+ * a separate version chip and a quiet instrument description.  It deliberately uses only palette tokens so it is
+ * equally legible in VIOLET, MONO and the light themes.  The canvas is limited to 124 rows, hence two full-width
+ * bands.  Ordinary Felucca builds retain the original square below. */
+#if FELUCCA_RDX
+#define RSPL_TOP_H 124
+#define RSPL_NODE_Y 20
+static void rdx_splash_node(int32_t x, int carrier)
+{
+    cv_rrect(x, RSPL_NODE_Y, 16, 16, carrier ? -2 : -8, carrier ? T_TEXT : T_RAISE, T_BG);
+    cv_rrect(x + 4, RSPL_NODE_Y + 4, 8, 8, carrier ? -1 : -4, carrier ? T_BG : T_THEME,
+             carrier ? T_TEXT : T_RAISE);
+}
+static void draw_splash(void)
+{
+    int32_t x, vw = 62;
+    lcd_fill(0, 0, 240, 240, T_BG);
+
+    cv_begin(240, RSPL_TOP_H, T_BG);
+    /* A four-operator chain.  Drawing the connection first lets every node sit cleanly above it. */
+    cv_rrect(74, RSPL_NODE_Y + 7, 92, 2, -1, T_MID, T_BG);
+    for (x = 74; x <= 134; x += 30)
+        rdx_splash_node(x, 0);
+    rdx_splash_node(164, 1);
+
+    GFX_HOOK_ALIGN(0, 62, 240, 62 + AF_L_CAP_H, AL_H, "RDX splash product centred");
+    cv_text_in(0, 62, 240, &AF_L, "Felucca-RDX", T_TEXT, T_BG);
+
+    x = HALF_UP(240 - vw);
+    cv_rrect(x, 100, vw, 20, -7, T_RAISE, T_BG);
+    GFX_HOOK_ALIGN(x, 100, x + vw, 120, AL_HV, "RDX splash version centred");
+    cv_text_in(x, 100 + CAP_IN(S, 20), vw, &AF_S, RDX_VERSION, T_THEME, T_RAISE);
+    cv_blit(0, 0);
+
+    cv_begin(240, 240 - RSPL_TOP_H, T_BG);
+    GFX_HOOK_ALIGN(0, 27, 240, 27 + AF_S_CAP_H, AL_H, "RDX splash description centred");
+    cv_text_in(0, 27, 240, &AF_S, "4-OP FM SYNTHESIZER", T_TEXT, T_BG);
+    cv_rrect(57, 58, 48, 2, -1, T_RAISE, T_BG);
+    cv_rrect(117, 55, 6, 6, -3, T_THEME, T_BG);
+    cv_rrect(135, 58, 48, 2, -1, T_RAISE, T_BG);
+    GFX_HOOK_ALIGN(0, 83, 240, 83 + AF_S_CAP_H, AL_H, "RDX splash project line centred");
+    cv_text_in(0, 83, 240, &AF_S, "OPEN SOURCE INSTRUMENT", T_MID, T_BG);
+    cv_blit(0, RSPL_TOP_H);
+    lcd_sync();
+}
+#else
 #define SPL_SQ 176                                  /* the square (even: centred exactly) */
 #define SPL_X0 ((240u - SPL_SQ) / 2u)               /* its top-left on the screen (x and y) */
 #define SPL_PAD 16                                  /* the text's inset: left (its ink), top and bottom (the capitals) */
@@ -1556,6 +1625,7 @@ static void draw_splash(void)
                 "splash maker's baseline SPL_PAD from the bottom");
     lcd_sync();
 }
+#endif
 
 /* UPDATE MODE countdown (main.c: OCT- + OCT+ held): over everything, the menu and the dialogs too */
 static void draw_uboot(void)

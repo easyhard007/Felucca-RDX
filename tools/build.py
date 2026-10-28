@@ -50,7 +50,20 @@ SDK_SHA256 = {
     "cfg/eq_cfg_hw.bin": "41167491bffed4651750719c973d2758adeb9021a5670d02d6a53c85ed80ea7d",
 }
 
-PRODUCT = "FM-1_900"                # package identity; release builds are FM-1_9XY
+def rdx_identity():
+    """Read the fork's fixed package identity from its release header."""
+    header = (FW / "src" / "rdx_version.h").read_text(encoding="utf-8")
+    match = re.search(r'^#define\s+RDX_IDENTITY\s+"(FM-1_9\d\d)"\s*$', header, re.M)
+    if not match:
+        raise SystemExit("RDX_IDENTITY is missing or invalid in firmware/src/rdx_version.h")
+    return match.group(1)
+
+
+# Upstream keeps its historic identity.  An RDX build instead has a fixed,
+# independently registered identity; FELUCCA_PRODUCT remains an escape hatch
+# for packaging tests and private development builds.
+PRODUCT = os.environ.get("FELUCCA_PRODUCT") or (rdx_identity() if os.environ.get("FELUCCA_RDX") == "1"
+                                                else "FM-1_900")
 VERSION = None                      # FELUCCA_VERSION for release builds (default: firmware/src/felucca.c)
 # FELUCCA_CPU2 (firmware/src/felucca.c), unset or 1, the default (1.6.1): the second core is built in, its entry and
 # stacks (firmware/hal/fm1_cpu1.S) linked and its waiting loop (.c1_text) checked; MENU > SYSTEM > 2ND CORE starts it
@@ -393,11 +406,12 @@ def main():
     a = ap.parse_args()
     name = "felucca.fwsc"
     clean_name = "felucca-clean.fwsc"
-    if a.release:                   # one digit each: the identity has room for two (X.Y.Z and X.Y.Z.W keep X.Y's)
+    if a.release:                   # one digit each: the upstream identity has room for two (X.Y.Z and X.Y.Z.W keep X.Y's)
         m = re.fullmatch(r"(\d)\.(\d)(?:\.\d){0,2}(-[A-Za-z0-9]+)?", a.release)
         if not m:
             raise SystemExit(f"--release {a.release}: use X.Y, X.Y.Z, X.Y.Z.W or X.Y-suffix, one digit each")
-        PRODUCT = "FM-1_9" + m[1] + m[2]
+        if os.environ.get("FELUCCA_RDX") != "1" and "FELUCCA_PRODUCT" not in os.environ:
+            PRODUCT = "FM-1_9" + m[1] + m[2]
         VERSION = "v" + a.release.lower()      # e.g. v1.0, v1.1-rc1
         name = f"felucca-{a.release}.fwsc"
         clean_name = f"felucca-{a.release}-clean.fwsc"

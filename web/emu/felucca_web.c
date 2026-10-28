@@ -552,6 +552,57 @@ EXPORT uint32_t web_test_visible_engine_count(void)
 }
 EXPORT uint32_t web_test_first_visible_engine(void) { return eng_vis(0u); }
 #if FELUCCA_RDX
+/* Self-contained flash migration regression. source: 0 foreign Felucca,
+ * 1 legacy RDX (0xF6), 2 current RDX. Result bits: live marker, saved marker,
+ * panel calibration retained, and object action (foreign cleared / RDX kept). */
+EXPORT uint32_t web_test_rdx_storage_migration(uint32_t source)
+{
+    static const uint8_t object[] = {
+        OBJ_PROJECT0, OBJ_PROJECT0 + 1u, OBJ_PROJECT0 + 2u, OBJ_PROJECT0 + 3u,
+        OBJ_UPRESET0, OBJ_UPRESET0 + 1u, OBJ_UPFM6, OBJ_UPRDX1, OBJ_AUTOSAVE
+    };
+    persist_t p, saved;
+    const uint8_t payload[3] = {0x52u, 0x44u, 0x58u};
+    uint32_t i, result = 0, objects_ok = 1;
+
+    memset(nor, 0xFF, sizeof nor);
+    memset(&settings, 0, sizeof settings);
+    memset(&favorites, 0, sizeof favorites);
+    memset(&persist_saved, 0, sizeof persist_saved);
+    memset(proj_slot, 0, sizeof proj_slot);
+    fm6_only_migrate = fm6_only_settings_seen = rdx_store_foreign = 0;
+    persist_pending = 0;
+    flash_ok = 1;
+    memset(&p, 0, sizeof p);
+    p.magic = PERSIST_MAGIC;
+    p.palette = palette_to_stored(UI_VIOLET_INDEX);
+    p.panel = PANEL_DEFAULT;
+    p.panel.enc[0] = 37;
+    p.favorites.factory[15][13] = source == 1u ? FM6_ONLY_SETTINGS_TAG :
+                                          source == 2u ? RDX_SETTINGS_TAG : 0u;
+    st_save(OBJ_SETTINGS, &p, sizeof p);
+    for (i = 0; i < sizeof object / sizeof object[0]; i++)
+        st_save(object[i], payload, sizeof payload);
+
+    persist_boot();
+    fm6_only_settings_boot();
+    settings_init();
+    if (fm6_only_migrate)
+        settings_save();
+
+    result |= favorites.factory[15][13] == RDX_SETTINGS_TAG ? 1u : 0u;
+    result |= st_load(OBJ_SETTINGS, &saved, sizeof saved) == (int)sizeof saved &&
+              saved.favorites.factory[15][13] == RDX_SETTINGS_TAG ? 2u : 0u;
+    result |= panel.enc[0] == 37 ? 4u : 0u;
+    for (i = 0; i < sizeof object / sizeof object[0]; i++) {
+        st_hdr_t h;
+        if (st_current(object[i], &h) < 0 || h.len != (source ? sizeof payload : 0u))
+            objects_ok = 0;
+    }
+    result |= objects_ok ? 8u : 0u;
+    return result;
+}
+
 EXPORT void web_test_rdx_preset(uint32_t p)
 {
 #if defined(__EMSCRIPTEN__)
@@ -571,6 +622,20 @@ EXPORT void web_test_rdx_dry(void)
 }
 EXPORT void web_test_rdx_type_set(uint32_t type) { menu_put(MI_RDXTYPE, type != 0u); }
 EXPORT uint32_t web_test_rdx_type(void) { return menu_get(MI_RDXTYPE); }
+EXPORT uint32_t web_test_rdx_preset_category(uint32_t preset)
+{
+    return preset_cat(ENGI_RDX, preset % RDX_NPATCHES);
+}
+EXPORT uint32_t web_test_rdx_filter_total(uint32_t list, uint32_t type)
+{
+    uint8_t old_list = rdx_list_filter, old_type = ui_lcat;
+    uint32_t total;
+    rdx_list_filter = (uint8_t)clamp((int32_t)list, 0, RDX_LIST_N - 1);
+    ui_lcat = (uint8_t)clamp((int32_t)type, 0, CAT_N - 1);
+    (void)preset_pos(&total);
+    rdx_list_filter = old_list; ui_lcat = old_type;
+    return total;
+}
 EXPORT void web_test_rdx_custom_name_load(void)
 {
     rdx_patch_t p;

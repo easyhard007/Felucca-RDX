@@ -38,6 +38,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check Pillow fonttools
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends emscripten
           if [ ! -x "$HOME/.jieli/toolchain/pi32v2/bin/clang" ]; then
             rm -rf "$HOME/.jieli"
             tools/get_toolchain.sh "$HOME/.jieli"
@@ -65,6 +67,8 @@ jobs:
           export JIELI_TOOLCHAIN="$HOME/.jieli/toolchain"
           export AC79_SDK="$HOME/fw-AC79_AIoT_SDK"
           ./build.sh
+          python web/build_emu.py
+          node web/emu/rdx_test.mjs build/emu/felucca.wasm
 
       - name: Assemble the Pages site
         shell: bash
@@ -77,9 +81,12 @@ jobs:
           touch build/site/.nojekyll
           test -s build/site/webapp/installer/index.html
           test -s build/site/webapp/editor/index.html
+          test -s build/site/webapp/emulator/index.html
+          test -s build/site/webapp/emulator/felucca.wasm
           test -s "build/site/firmware/felucca-rdx-$version.fwsc"
           grep -q "Felucca-RDX Installer" build/site/webapp/installer/index.html
           grep -q "Felucca-RDX Editor" build/site/webapp/editor/index.html
+          grep -q "Felucca-RDX Emulator" build/site/webapp/emulator/index.html
 
       - name: Test the web tools
         shell: bash

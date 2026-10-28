@@ -1642,12 +1642,31 @@ static void draw(int s)
     }
     if (s == S_SPLASH) {                          /* the power-on splash (main.c, before the UI): its lines, the version
                                                    * shown FELUCCA_VERSION (run_tests.sh: src/felucca.c's) */
+#if FELUCCA_RDX
+        static const char WANT[] = "Felucca-RDX|" RDX_VERSION "|4-OP FM SYNTHESIZER|OPEN SOURCE INSTRUMENT";
+#else
         static const char WANT[] = "Felucca|" FELUCCA_VERSION "|H\xFCgelton Instruments|with community";
+#endif
         splash_seen[0] = 0;
         in_splash = 1;
         draw_splash();
         in_splash = 0;
-        {   /* the square whole on the screen (176 x 176 at 32,32, more than the canvas): its edges and square corners
+        {
+#if FELUCCA_RDX
+            /* The RDX identity screen is full-width and intentionally has no inherited Felucca square.  Its four
+             * operator nodes must be visible against the background, including the square carrier. */
+            uint16_t bg = host_screen[0];
+            int32_t x, y, ink = 0;
+            for (y = 18; y < 40; y++)
+                for (x = 70; x < 184; x++)
+                    ink += host_screen[(uint32_t)y * 240u + (uint32_t)x] != bg;
+            if (ink < 180) {
+                if (rep) fprintf(rep, "FIND %-26s the RDX splash operator mark is missing (%d coloured pixels)\n",
+                                 cur_name, (int)ink);
+                nfind++;
+            }
+#else
+            /* the square whole on the screen (176 x 176 at 32,32, more than the canvas): its edges and square corners
              * RAISE, BG just outside; its text's ink 16 px in from the left and the top (the bottom: AL_B, the hook) */
             const int32_t q0 = 32, q1 = 32 + 176 - 1;
             uint16_t bg = host_screen[0], ra = host_screen[(uint32_t)(q0 + 1) * 240u + (uint32_t)q0 + 1];
@@ -1671,6 +1690,7 @@ static void draw(int s)
                                  cur_name, bad ? "off" : "ok", (int)ix, (int)iy);
                 nfind++;
             }
+#endif
         }
         if (strcmp(splash_seen, WANT)) {
             if (rep) fprintf(rep, "FIND %-26s the splash shows '%s', not '%s'\n", cur_name, splash_seen, WANT);

@@ -40,18 +40,10 @@ $defines = "FELUCCA_RDX=1 FELUCCA_FM6_ONLY=1 FELUCCA_CPU2=$Cpu2"
 $firmwareCommand = "cd '$wslRoot' && JIELI_TOOLCHAIN='$wslToolchain' AC79_SDK='$wslSdk' JIELI_DOCKER=0 $defines python3 tools/build.py"
 Invoke-WslWithRetry -Arguments @("sh", "-lc", $firmwareCommand) | Write-Host
 
-$emuCommand = "cd '$wslRoot' && emcc -O2 -ffp-contract=off -std=gnu99 -w -DFELUCCA_RDX=1 -DFELUCCA_FM6_ONLY=1 -DFELUCCA_CPU2=0 -Ibuild/gen -Ifirmware/src --no-entry -sSTANDALONE_WASM -sTOTAL_STACK=1048576 -sINITIAL_MEMORY=33554432 -sFILESYSTEM=0 -o build/emu/felucca.wasm web/emu/felucca_web.c"
+$emuCommand = "cd '$wslRoot' && python3 web/build_emu.py"
 Invoke-WslWithRetry -Arguments @("sh", "-lc", $emuCommand) | Write-Host
 
 $emuRoot = Join-Path $root "build\emu"
-$fontRoot = Join-Path $emuRoot "fonts"
-New-Item -ItemType Directory -Force -Path $fontRoot | Out-Null
-$html = Get-Content -Raw -LiteralPath (Join-Path $root "web\emu\index.html")
-$html = $html.Replace("@VERSION@", "Felucca RDX $version").Replace("@PREVIEW@", "")
-Set-Content -NoNewline -Encoding utf8 -LiteralPath (Join-Path $emuRoot "index.html") -Value $html
-Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\worklet.js") -Destination $emuRoot
-Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\fonts\DotGothic16-subset.woff") -Destination $fontRoot
-Copy-Item -Force -LiteralPath (Join-Path $root "web\emu\fonts\OFL.txt") -Destination $fontRoot
 
 & node (Join-Path $root "web\emu\rdx_test.mjs") (Join-Path $emuRoot "felucca.wasm")
 if ($LASTEXITCODE -ne 0) { throw "RDX emulator regression failed" }

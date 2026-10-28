@@ -53,6 +53,7 @@
   <p id="status"></p>
   <pre id="log"></pre>
   <p><a href="../editor/" style="color:inherit" data-t="editor"></a></p>
+  <p><a href="../emulator/" style="color:inherit" data-t="emulator"></a></p>
   <p class="small">Felucca-RDX is based on <a href="https://github.com/hugelton/Felucca" target="_blank" rel="noopener" style="color:inherit">Felucca</a> by Leo Kuroshita (@kurogedelic), <a href="https://hugelton.com" target="_blank" rel="noopener" style="color:inherit">Hügelton Instruments</a>, with its PHASE engine and drum voices, the Hügelton Sample Pack (CC0 1.0) and Fukiai icons (MIT).<br>
     Font: Inter Tight (The Inter Project Authors, SIL OFL 1.1). Samples: Versilian Studios VSCO-2 Community Edition and VCSL (CC0 1.0).<br>
     FM6 engine: msfa from Dexed (Google Inc., Pascal Gauthier, Apache-2.0). The package also holds three JieLi AC79 SDK files, uboot.boot, cfg_tool.bin and eq_cfg_hw.bin (JieLi Technology, Apache-2.0). <a href="../../firmware/LICENSING.md" style="color:inherit">Licences</a>: <a href="../../firmware/LICENSE" style="color:inherit">GPL-3.0</a>, <a href="../../firmware/LICENSES/Apache-2.0.txt" style="color:inherit">Apache-2.0</a>, <a href="../../firmware/LICENSES/" style="color:inherit">all</a>.<br>
@@ -71,6 +72,7 @@ const TEXT = {
     cleanWarn: "这会清除已保存的项目、用户音色、采样、自动保存数据和全部系统设置。",
     cleanConfirm: "全新安装将清除已保存的项目、用户音色、采样、自动保存数据和全部系统设置。是否继续？",
     editor: "编辑器（安装后可在电脑上管理音色和编辑参数）",
+    emulator: "在线模拟器（无需安装即可试玩最新版）",
     direct: "请将 USB 数据线直接连接到电脑，不需要 Probe 或 Transporter 等额外设备。",
     brick: "如果安装失败并导致 FM-1 无法启动，需要使用 Transporter 恢复：",
     beta: "Felucca-RDX 是仍在开发中的自定义固件。如发现问题，请在 GitHub 上反馈。使用本固件存在风险，作者不对由此造成的 FM-1 损坏或异常负责。",
@@ -106,6 +108,7 @@ const TEXT = {
     cleanWarn: "Erases saved projects, user voices, samples, autosave data and all system settings.",
     cleanConfirm: "Fresh install will erase saved projects, user voices, samples, autosave data and all system settings. Continue?",
     editor: "Editor (after installing: edit sounds and sequences from the computer)",
+    emulator: "Online emulator (play the latest build without installing)",
     direct: "Connect the USB cable directly to the computer. No probe or Transporter is needed.",
     brick: "If an install fails and the FM-1 no longer starts, recovering it needs a Transporter:",
     beta: "Felucca-RDX is custom firmware under active development; please report problems on GitHub. The author accepts no responsibility if your FM-1 is damaged or misbehaves because of it. Use it at your own risk.",
@@ -134,7 +137,7 @@ const TEXT = {
     license: "GPL-3.0, no warranty. Source:",
   },
 };
-let lang = (navigator.language || "en").toLowerCase().startsWith("zh") ? "zh" : "en";
+let lang = "en";
 const t = (k) => TEXT[lang][k];
 let lastKey = null, lastArg = "";
 function applyLang() {

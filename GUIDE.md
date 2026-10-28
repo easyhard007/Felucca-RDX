@@ -7,7 +7,8 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 1.0.0
+- 当前版本：Felucca RDX 1.0.3
+- 固件独立身份：`FM-1_947`（与上游 Felucca 的 `FM-1_900` 区分，同时保留 9xx Loader 恢复兼容性）
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
@@ -31,7 +32,13 @@ cd Felucca-RDX
 - `build\felucca-rdx-dualcore.fwsc`：双核固件的具名副本；
 - `build\felucca.bin`：FM-1 应用镜像；
 - `build\emu`：本地源码模拟器；
-- `build\site\webapp\installer`：本地 Web MIDI 安装器。
+- `build\site\webapp\installer`：本地 Web MIDI 安装器；
+- `build\site\webapp\emulator`：可发布到 GitHub Pages 的源码 WebAssembly 模拟器。
+
+普通包也是提交到 The FM-1 Firmware Hub 的唯一固件包。它会在首次启动时检查
+Felucca-RDX 用户区标记：从旧版 RDX 升级时保留 User 音色和兼容设置；从原版
+Felucca、其他分支或未知固件进入时，仅废弃不兼容的工程、自动保存和用户音色对象，
+保留面板校准。迁移使用原子 A/B 存储提交；中途断电时，下次启动会继续迁移。
 
 如需排查双核问题，可以生成单核诊断版本：
 
@@ -56,15 +63,21 @@ cd Felucca-RDX
 
 然后访问 <http://localhost:8790/>。它适合快速检查音色、SysEx、声音路由和界面逻辑，但不模拟真实 USB、DMA 和 AC79 双核时序。
 
+公开在线版为 <https://easyhard007.github.io/Felucca-RDX/webapp/emulator/>。GitHub Actions
+每次发布都从当前 RDX 源码重新编译它，因此打开网页就是最新版，不需要手动选择
+`.fwsc` 文件。如需检查接近真机的 CPU 时序与音频缓冲，仍应使用上述执行真实
+pi32v2 固件的 FM-1 模拟器。
+
 ## 烧录到 FM-1
 
 公开网页可直接使用，无需在本机启动服务器：
 
 - 安装器：<https://easyhard007.github.io/Felucca-RDX/webapp/installer/>
 - 音色编辑器：<https://easyhard007.github.io/Felucca-RDX/webapp/editor/#library>
+- 在线模拟器：<https://easyhard007.github.io/Felucca-RDX/webapp/emulator/>
 
 `main` 分支每次推送后，GitHub Actions 会自动编译双核 RDX 固件，生成普通安装包和
-全新安装包，再将安装器与编辑器一起发布到 GitHub Pages。网页安装器和它提供的
+全新安装包，再将安装器、编辑器与模拟器一起发布到 GitHub Pages。网页安装器和它提供的
 固件来自同一次构建。
 
 如需本地使用，先编译固件，再运行：
@@ -76,6 +89,8 @@ cd Felucca-RDX
 用 Chrome 或 Edge 打开 <http://localhost:8000/webapp/installer/>，点击 `Install`，授权访问 FM-1 的 MIDI 端口并等待写入完成。需要完全清除旧用户区时，勾选 `Fresh install` 后再安装。该模式会清除工程、用户音色、用户采样、自动保存以及全部系统设置，内置 Factory/Selected 音色不受影响。
 
 启动安装器时，脚本会在发现新固件包后自动重建网页安装目录，避免 `build\site\firmware` 继续提供旧版本。普通安装使用 `build\felucca.fwsc` 并保留用户区；全新安装使用 `build\felucca-clean.fwsc`。
+
+普通包已经能够安全处理来自其他 Felucca 固件的不兼容用户区。`Fresh install` 仍然保留，适合用户明确希望彻底恢复初始状态、清除所有系统设置和用户数据的情况；正常的 Felucca-RDX 版本升级不应勾选它。
 
 写入期间保持设备供电，不要拔出 USB 线或关闭页面。若要恢复官方固件，可使用 Felucca 官方安装器的 `Return to official V15`。
 
@@ -108,13 +123,12 @@ RDX 使用串行立体声 `FX1 -> FX2` 链。Phaser 和 Flanger 可在 `AUDIO` �
 
 两项默认均为 `RDX`，选择会保存到系统设置。
 
-按 `FX` 会在 5 页间循环：
+按 `FX` 会在 4 页间循环：
 
 1. `FX`：`KNOB 1/2` 调整 FX1 的类型和发送量，`KNOB 3/4` 调整 FX2；
 2. `FX1`：按 FX1 类型动态显示其参数；
 3. `FX2`：按 FX2 类型动态显示其参数；
-4. `GLOBAL FX`：预留的全局效果 TYPE/MIX，目前只保存和显示，不参与声音计算；
-5. `SLICER`：保留 Felucca 的切片门控功能。
+4. `SLICER`：保留 Felucca 的切片门控功能。未完成的 `GLOBAL FX` 页面不再显示。
 
 `FX` 首页在四张参数卡上方使用两个横跨双卡的 `FX1` / `FX2` 主题标题条；四张卡依次显示
 `TYPE / SEND / TYPE / SEND`。名称与数值均使用小号字体，RDX 效果名称最多显示 6 个字符。TYPE 为

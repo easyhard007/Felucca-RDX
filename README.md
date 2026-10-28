@@ -8,7 +8,8 @@ a modified fork of [Felucca](https://github.com/hugelton/Felucca) by Leo
 Kuroshita / Hügelton Instruments. The product UI exposes only the RDX
 instrument and its sound sets.
 
-The current firmware version is **Felucca RDX 1.0.0**. RDX is monotimbral: the
+The current firmware version is **Felucca RDX 1.0.3**. Its independent FM-1
+firmware identity is **`FM-1_947`**. RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
@@ -37,13 +38,24 @@ or installed on an FM-1 through the generated local Web MIDI installer.
 The build also produces `build/felucca-clean.fwsc`; this fresh-install package
 erases saved projects, user voices and samples, autosave data and system settings.
 
+The normal package is the single package intended for The FM-1 Firmware Hub.
+It carries an RDX-owned storage marker: upgrades from an earlier Felucca-RDX
+retain their user voices and settings, while a first install over another
+Felucca-derived firmware atomically discards incompatible projects, autosave
+and user-voice records. Panel calibration is retained. The clean package remains
+available in the Felucca-RDX installer for an explicitly requested factory reset.
+
 The public GitHub Pages tools are built from `main` by GitHub Actions:
 
 - [Felucca-RDX Installer](https://easyhard007.github.io/Felucca-RDX/webapp/installer/)
 - [Felucca-RDX Editor](https://easyhard007.github.io/Felucca-RDX/webapp/editor/#library)
+- [Felucca-RDX Online Emulator](https://easyhard007.github.io/Felucca-RDX/webapp/emulator/)
 
 The installer downloads the firmware package produced by the same workflow, so
-the website and firmware always come from the same commit and version.
+the website and firmware always come from the same commit and version. The online
+emulator is rebuilt from the current RDX source on every deployment and therefore
+opens the latest build automatically. It is intended for sound, SysEx, routing and
+UI checks; it does not reproduce the FM-1's AC79 dual-core timing, USB or DMA.
 
 See [GUIDE.md](GUIDE.md) for the build, simulator and installation workflow.
 
@@ -64,8 +76,9 @@ The version is defined once in `firmware/src/rdx_version.h`. Release builds use
 semantic versioning; the splash, WebAssembly page and installer package all use
 that single value.
 
-`.github/workflows/pages.yml` builds the dual-core RDX firmware, assembles both
-web applications with `web/make_site.py`, and deploys `build/site` to GitHub
+`.github/workflows/pages.yml` builds the dual-core RDX firmware, builds the
+WebAssembly emulator, assembles all three web applications with
+`web/make_site.py`, and deploys `build/site` to GitHub
 Pages on every push to `main`. The workflow can also be run manually from the
 repository's Actions page.
 

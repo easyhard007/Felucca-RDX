@@ -8,6 +8,7 @@
                               JieLi SDK files under Apache-2.0, see LICENSING.md)
   webapp/installer/index.html index_pkg.html, self-contained (fm1pkg.js, fm1ota.js, metadata inlined)
   webapp/editor/index.html    editor.html (+ fukiai.ttf, FUKIAI-LICENSE.txt)
+  webapp/emulator/            latest source-level RDX WebAssembly emulator from build/emu
   src/                        not touched
 
   web/make_site.py build/felucca-X.Y.fwsc X.Y OUT_DIR [build/felucca-X.Y-clean.fwsc]
@@ -62,7 +63,8 @@ def main(pkg, version, out, clean_pkg=None):
         if html.count(mark) != 1:
             raise SystemExit(f"index_pkg.html must contain {mark} once; update make_site.py")
     html = html.replace("/*LIB*/", lib).replace("/*META*/", meta)
-    inst, ed, fw = out / "webapp" / "installer", out / "webapp" / "editor", out / "firmware"
+    inst, ed, emu, fw = (out / "webapp" / "installer", out / "webapp" / "editor",
+                         out / "webapp" / "emulator", out / "firmware")
     for d in (inst, ed, fw):
         d.mkdir(parents=True, exist_ok=True)
     for old in fw.glob("felucca-*.fwsc"):          # one package: the current one
@@ -86,11 +88,19 @@ def main(pkg, version, out, clean_pkg=None):
     for f in ("fukiai.ttf", "FUKIAI-LICENSE.txt", "fm1backup.js"):
         if (HERE / f).exists():
             shutil.copy(HERE / f, ed / f)
+    emu_src = pkg.parent / "emu"
+    required = ("index.html", "felucca.wasm", "worklet.js", "fonts/DotGothic16-subset.woff", "fonts/OFL.txt")
+    missing = [name for name in required if not (emu_src / name).is_file()]
+    if missing:
+        raise SystemExit(f"{emu_src}: browser emulator is incomplete ({', '.join(missing)}); run web/build_emu.py")
+    if emu.exists():
+        shutil.rmtree(emu)
+    shutil.copytree(emu_src, emu)
     (out / "index.html").write_text(
         '<!doctype html><meta charset="utf-8"><title>Felucca-RDX</title>'
         '<meta http-equiv="refresh" content="0; url=webapp/installer/">'
         '<a href="webapp/installer/">Felucca-RDX installer</a>\n', encoding="utf-8")
-    print(f"site: {out}: webapp/installer ({len(html)} B), webapp/editor, "
+    print(f"site: {out}: webapp/installer ({len(html)} B), webapp/editor, webapp/emulator, "
           f"firmware/{name} + {clean_name} ({len(raw)} B, {product})")
 
 

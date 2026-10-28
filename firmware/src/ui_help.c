@@ -23,8 +23,7 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
 #if FELUCCA_RDX
     {"FX", "[K1,3]TYPE[K2,4]SEND[FX]FX1"},
     {"FX1", "[K1-4]FX1 PARAMETERS[FX]FX2"},
-    {"FX2", "[K1-4]FX2 PARAMETERS[FX]GLOBAL"},
-    {"GLOBAL FX", "[K1]TYPE[K2]MIX[FX]SLICER"},
+    {"FX2", "[K1-4]FX2 PARAMETERS[FX]SLICER"},
     {"SLICER", "[K1]ON[K2]PATTERN[FX]FX"},
 #else
     {"FX", "[K1-4]SENDS[FX]HOLD: PERFORM"},
@@ -51,7 +50,11 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"VOICE 3", "[K1]STEREO SPREAD[EDIT]EDIT 1"},
     {"SONG", "[K1]SECTION[KEYS]A-D[PLAY]SONG"},
     {"USER", "[K1]SLOT[OCT+]SAVE[SAVE]PRESETS"},
+#if FELUCCA_RDX
+    {"PRESETS", "[K2]LIST[K3]FAV[K4]TYPE"},
+#else
     {"PRESETS", "[K2]ENGINE[K3]FAV[K4]LIST"},
+#endif
     {"PHRASES", "[K1]PHRASE[OCT+]LOAD[SAVE]PROJECT"},
     {"PROJECT", "[K2]ERASE[K4]SAVE[EDIT]NAME"},   /* (1.5.5, #199: ERASE) */
     {"TOOLS", "[K1]CLEAR[K2]INIT, CLEAN[OCT+]DO"},   /* (1.5.5, #190: KNOB 2 on, CLEAN INIT) */

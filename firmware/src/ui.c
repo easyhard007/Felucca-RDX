@@ -461,8 +461,23 @@ static uint32_t large_kind(void)
 }
 /* the geometry of the page shown: the cards' height, the panel's top and height */
 static uint32_t card_h(void) { return large_kind() == LK_TALL ? LG_CARD_H : CARD_H; }
-static uint32_t graph_y(void) { return large_kind() == LK_TALL ? LG_Y_GRAPH : Y_GRAPH; }
-static uint32_t graph_h(void) { return large_kind() == LK_TALL ? LG_H_GRAPH : H_GRAPH; }
+static int rdx_graph_geometry(void)
+{
+#if FELUCCA_RDX
+    uint32_t g = !ui.home ? cur_page()->graph : 0u;
+    return g >= GR_RDX_ALG && g <= GR_RDX_LFO;
+#else
+    return 0;
+#endif
+}
+static uint32_t graph_y(void)
+{
+    return large_kind() == LK_TALL ? LG_Y_GRAPH : rdx_graph_geometry() ? Y_GRAPH - 1u : Y_GRAPH;
+}
+static uint32_t graph_h(void)
+{
+    return large_kind() == LK_TALL ? LG_H_GRAPH : rdx_graph_geometry() ? H_GRAPH + 2u : H_GRAPH;
+}
 static int large_face_has(const char *s)                /* every glyph of s in the sparse L face */
 {
     for (; *s; s++)
@@ -1655,11 +1670,35 @@ static uint32_t preset_all_at(uint32_t n, uint32_t *k)
     return e;
 }
 
-/* PRESETS > LIST (KNOB 4): ALL, FAV (favorites.filter, as up to 1.1.5), or one category (1.2, Discussion #90: BASS ..
- * OTHER, category.c): the list mode 0 ALL, 1 FAV, 1 + CAT_* a category. The category is kept with the settings in a
- * byte no engine uses (ui_lcat: 0 = none; firmware before reads ALL there, and favorites.filter stays 0 / 1 for it, the
- * editor and backups); the PRESETS knob and page browse that list */
+/* PRESETS browsing filters.  Full Felucca keeps its historical KNOB 4 LIST
+ * (ALL, FAV, categories).  RDX has one engine, so KNOB 2 becomes LIST
+ * (ALL/FACTORY/SELECTED/USER) and KNOB 4 becomes TYPE (ALL plus CAT_*).
+ * Both RDX filters combine; the sound-set selector is deliberately a UI
+ * session value while TYPE retains the existing persisted category byte. */
 #define ui_lcat (favorites.factory[15][11])
+#if FELUCCA_RDX
+#define LIST_N CAT_N                                      /* ALL + BASS .. VOCAL; mode is the CAT_* value */
+enum { RDX_LIST_ALL, RDX_LIST_FACTORY, RDX_LIST_SELECTED, RDX_LIST_USER, RDX_LIST_N };
+static uint8_t rdx_list_filter;
+static uint32_t list_mode(void) { return ui_lcat < CAT_N ? ui_lcat : 0u; }
+static void list_set(uint32_t m) { ui_lcat = (uint8_t)(m < CAT_N ? m : 0u); favorites.filter = 0; }
+static const char *list_name(uint32_t m) { return m && m < CAT_N ? CAT_NAME[m] : "ALL"; }
+static const char *rdx_list_name(uint32_t m)
+{
+    static const char *const N[RDX_LIST_N] = {"ALL", "FACTORY", "SELECTED", "USER"};
+    return N[m < RDX_LIST_N ? m : 0u];
+}
+static int rdx_list_keep(uint32_t e, uint32_t k)
+{
+    int32_t s;
+    if (!rdx_list_filter) return 1;
+    if (e == NENGINES) return rdx_list_filter == RDX_LIST_USER;
+    if (e != ENGI_RDX) return 0;
+    s = rdx_sound_set_index(k);
+    return (rdx_list_filter == RDX_LIST_FACTORY && s == 0) ||
+           (rdx_list_filter == RDX_LIST_SELECTED && s == 1);
+}
+#else
 #define LIST_N (1u + CAT_N)                              /* ALL FAV BASS LEAD PAD PLUCK KEYS DRUM FX OTHER */
 static uint32_t list_mode(void) { return favorites.filter ? 1u : ui_lcat && ui_lcat < CAT_N ? 1u + ui_lcat : 0u; }
 static void list_set(uint32_t m)
@@ -1668,12 +1707,25 @@ static void list_set(uint32_t m)
     ui_lcat = (uint8_t)(m >= 2u && m < LIST_N ? m - 1u : 0u);
 }
 static const char *list_name(uint32_t m) { return m == 0u ? "ALL" : m == 1u ? "FAV" : CAT_NAME[(m - 1u) % CAT_N]; }
+#endif
 /* the category of list entry e, k (preset_all_at: NENGINES = user preset k) */
 static uint32_t sound_cat(uint32_t e, uint32_t k) { return e == NENGINES ? up_cat(k) : preset_cat(e, k); }
 static int list_keep(uint32_t e, uint32_t k)
 {
     uint32_t m = list_mode();
+#if FELUCCA_RDX
+    return rdx_list_keep(e, k) && (!m || sound_cat(e, k) == m);
+#else
     return m == 1u ? favorite_has(e, k) : m ? sound_cat(e, k) == m - 1u : 1;
+#endif
+}
+static int preset_filter_on(void)
+{
+#if FELUCCA_RDX
+    return rdx_list_filter || list_mode();
+#else
+    return list_mode() != 0u;
+#endif
 }
 /* the category of the sound track t plays: its user preset's, else its factory preset's (the NAME screen's default) */
 static uint32_t track_cat(const track_t *t)
@@ -1685,7 +1737,7 @@ static uint32_t track_cat(const track_t *t)
 static uint32_t preset_pos(uint32_t *total)
 {
     uint32_t all, current = preset_all_pos(&all), n = 0, pos = 0xFFFFFFFFu;
-    if (!list_mode()) { *total = all; return current; }
+    if (!preset_filter_on()) { *total = all; return current; }
     for (uint32_t i = 0; i < all; i++) {
         uint32_t k, e = preset_all_at(i, &k);
         if (!list_keep(e, k)) continue;
@@ -1698,7 +1750,7 @@ static uint32_t preset_pos(uint32_t *total)
 static uint32_t preset_at(uint32_t n, uint32_t *k)
 {
     uint32_t all;
-    if (!list_mode()) return preset_all_at(n, k);
+    if (!preset_filter_on()) return preset_all_at(n, k);
     preset_all_pos(&all);
     for (uint32_t i = 0; i < all; i++) {
         uint32_t e = preset_all_at(i, k);
@@ -1820,7 +1872,14 @@ static void eng_list_step(int32_t direction)         /* the next / previous soun
 static void preset_step(int32_t direction)
 {
     uint32_t total, cur = preset_pos(&total);
-    if (!total) { ui_message(list_mode() == 1u ? "NO FAVORITES" : "NO SOUNDS IN LIST"); return; }
+    if (!total) {
+#if FELUCCA_RDX
+        ui_message("NO SOUNDS IN FILTER");
+#else
+        ui_message(list_mode() == 1u ? "NO FAVORITES" : "NO SOUNDS IN LIST");
+#endif
+        return;
+    }
     preset_go(cur >= total ? (direction > 0 ? 0 : total - 1) :
               (cur + (direction > 0 ? 1u : total - 1u)) % total);
 }
@@ -1831,7 +1890,7 @@ static uint32_t preset_visible(uint32_t cur, uint32_t total, uint32_t row)
 {
     uint32_t first, last;
     if (!total || row >= 7u) return total;
-    if (!list_mode())
+    if (!preset_filter_on())
         return (cur + total * 4u + row - 3u) % total;
     first = cur < total && cur > 3u ? cur - 3u : 0u;
     last = total > 7u ? total - 7u : 0u;

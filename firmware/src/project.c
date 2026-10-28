@@ -1207,12 +1207,21 @@ static void persist_boot(void)                    /* before settings_init / pane
         if (settings_import(&p, n))
             persist_saved = p;
     }
+#if FELUCCA_RDX
+    rdx_store_migrate_boot();                   /* before another firmware's projects/user voices can be scanned */
+#endif
     {   /* projects: fill empty RAM slots from flash, so the slot list is right after power-on */
         uint32_t i;
+#if FELUCCA_RDX
+        if (!rdx_store_foreign)
+#endif
         for (i = 0; i < 4u; i++)
             if (!proj_import(&proj_scratch, &proj_slot[i], sizeof(project_store_t)))
                 proj_fetch(i);
     }
+#if FELUCCA_RDX
+    if (!rdx_store_foreign)
+#endif
     up_boot();                                     /* user presets */
 #endif
 }

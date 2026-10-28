@@ -33,6 +33,12 @@ const DESC = process.env.FELUCCA_DESC || join(HERE, "../build/host/desc.json");
 const TOOLS = process.env.FELUCCA_TOOLS || join(HERE, "../tools");
 const FW_ROOT = process.env.FELUCCA_ROOT || join(HERE, "..");
 
+const installerHtml = readFileSync(join(HERE, "index_pkg.html"), "utf8");
+ok(installerHtml.includes('let lang = "en";') &&
+   installerHtml.includes('href="../emulator/"') &&
+   installerHtml.includes('other: "中文"'),
+   "installer: English by default, Chinese toggle and emulator link");
+
 /* ------------------------------------------------------------ editor protocol --- */
 const html = readFileSync(join(HERE, "editor.html"), "utf8");
 const proto = html.slice(html.indexOf("/*PROTO-BEGIN*/"), html.indexOf("/*PROTO-END*/"));

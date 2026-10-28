@@ -987,10 +987,15 @@ static void edit_param(uint32_t slot, int32_t steps)
         if (slot == 0u) {
             preset_step(steps);
         } else if (slot == 1u) {
+#if FELUCCA_RDX
+            rdx_list_filter = (uint8_t)clamp((int32_t)rdx_list_filter + steps, 0, RDX_LIST_N - 1);
+            ui.force = 1;
+#else
             select_engine(eng_step(TSEL->eng_req, steps));
+#endif
         } else if (slot == 2u) {
             preset_mark(steps > 0);
-        } else if (slot == 3u) {                          /* LIST: ALL FAV BASS .. OTHER (ui.c list_mode), no wrap */
+        } else if (slot == 3u) {                          /* TYPE/LIST filter, no wrap */
             uint32_t m = (uint32_t)clamp((int32_t)list_mode() + steps, 0, (int32_t)LIST_N - 1);
             if (m != list_mode()) {
                 list_set(m);

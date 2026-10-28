@@ -230,14 +230,22 @@ static void rdx_ui_graph_matrix(uint32_t g)
     rdx_patch_t p;
     uint8_t *rp = rdx_ui_row_ptr(g);
     uint32_t rows = rdx_ui_rows(g), row, op;
+    int32_t pitch = rows == 3u ? 31 : g == GR_RDX_FREQ ? 22 : rows == 4u ? 24 : 20;
+    int32_t y0 = rows == 3u ? 7 : g == GR_RDX_FREQ ? 1 : rows == 4u ? 4 : 3;
+    /* OP LEVEL is denser than the other four-row pages; keep its generous
+     * row pitch, but use the small face so long labels and values breathe. */
+    const aafont_t *vf = rows <= 4u && g != GR_RDX_LVL ? &AF_M : &AF_S;
+    int32_t value_x = g == GR_RDX_KSC || g == GR_RDX_LVL ? 82 : 76;
+    int32_t value_pitch = g == GR_RDX_KSC || g == GR_RDX_LVL ? 37 : 38;
+    int32_t value_w = g == GR_RDX_KSC || g == GR_RDX_LVL ? 34 : 36;
     rdx_patch_for_track(song.sel, &p);
     for (row = 0; row < rows; row++) {
-        int32_t y = 5 + (int32_t)row * (88 / (int32_t)rows);
+        int32_t y = y0 + (int32_t)row * pitch;
         uint16_t bg = rp && row == *rp ? T_THEME : T_SURF;
         uint16_t fg = rp && row == *rp ? T_INK : T_MID;
         char v[12];
-        if (rp && row == *rp) cv_rrect(7, y - 2, 226, 15, 3, bg, T_SURF);
-        cv_text_on(12, y, &AF_S, rdx_ui_row_name(g, row), fg, bg);
+        if (rp && row == *rp) cv_rrect(7, y - 2, 226, pitch - 3, 4, bg, T_SURF);
+        cv_text_on(12, y + (vf == &AF_M ? 1 : 0), vf, rdx_ui_row_name(g, row), fg, bg);
         for (op = 0; op < 4u; op++) {
             rdx_patch_t q = p;
             int32_t lo, hi;
@@ -249,13 +257,15 @@ static void rdx_ui_graph_matrix(uint32_t g)
             else if (g == GR_RDX_FREQ && row == 0u) str_cpy(v, n ? "FIX" : "RAT", sizeof v);
             else if (g == GR_RDX_FREQ && row == 3u) rdx_ui_signed(v, (int32_t)n - 64);
             else fmt_int(v, (int32_t)n);
-            cv_text_in(76 + (int32_t)op * 38, y, 36, &AF_S, v,
+            cv_text_in(value_x + (int32_t)op * value_pitch, y + (vf == &AF_M ? 1 : 0), value_w, vf, v,
                        p.op[op].enable ? fg : T_DIM, bg);
         }
     }
     if (g == GR_RDX_FREQ) {
         char f[12];
-        cv_text_on(12, 96, &AF_S, "RESULT", T_DIM, T_SURF);
+        /* RESULT can contain x31.99: only this sixth row needs the smaller
+         * face; the editable MODE/COARSE/FINE/DETUNE rows stay unchanged. */
+        cv_text_on(12, 92, &AF_S, "RESULT", T_DIM, T_SURF);
         for (op = 0; op < 4u; op++) {
             const rdx_op_param_t *o = &p.op[op];
             if (!o->freq_mode) {
@@ -268,7 +278,8 @@ static void rdx_ui_graph_matrix(uint32_t g)
             } else {
                 fmt_int(f, (int32_t)o->freq_coarse); str_cpy(f + str_len(f), "F", 2);
             }
-            cv_text_in(76 + (int32_t)op * 38, 96, 36, &AF_S, f, p.op[op].enable ? T_MID : T_DIM, T_SURF);
+            cv_text_in(76 + (int32_t)op * 38, 92, 36, &AF_S, f,
+                       p.op[op].enable ? T_MID : T_DIM, T_SURF);
         }
     }
 }
@@ -286,10 +297,10 @@ static void rdx_ui_graph_algorithm(void)
         {47, 96,145,194}, {47, 96,145,194}, {47, 96,145,194}
     };
     static const uint8_t Y[12][4] = {
-        {73,27,27,27}, {73,73,73,27}, {73,27,27,73},
-        {73,27,52,27}, {73,27,48,73}, {73,73,27,27},
-        {73,73,27,27}, {73,27,73,27}, {73,73,73,27},
-        {73,73,73,27}, {73,73,73,27}, {73,73,73,73}
+        {66,20,20,20}, {66,66,66,20}, {66,20,20,66},
+        {66,20,45,20}, {66,20,41,66}, {66,66,20,20},
+        {66,66,20,20}, {66,20,66,20}, {66,66,66,20},
+        {66,66,66,20}, {66,66,66,20}, {66,66,66,66}
     };
     rdx_patch_t p;
     uint32_t alg, src, dst, carriers, first = 4u, last = 0u;
@@ -317,14 +328,14 @@ static void rdx_ui_graph_algorithm(void)
     for (src = 0; src < 4u; src++)
         if ((carriers >> src) & 1u) {
             uint16_t c = p.op[src].enable ? T_THEME : T_DIM;
-            cv_line_t(X[alg][src], Y[alg][src] + 11, X[alg][src], 91, c, 2);
+            cv_line_t(X[alg][src], Y[alg][src] + 11, X[alg][src], 84, c, 2);
             if (first == 4u) first = src;
             last = src;
         }
     if (first < 4u) {
         uint16_t c = p.op[first].enable ? T_THEME : T_DIM;
-        if (last != first) cv_line_t(X[alg][first], 91, X[alg][last], 91, c, 2);
-        cv_line_t(X[alg][first], 91, X[alg][first], 98, c, 2);
+        if (last != first) cv_line_t(X[alg][first], 84, X[alg][last], 84, c, 2);
+        cv_line_t(X[alg][first], 84, X[alg][first], 91, c, 2);
     }
 
     for (src = 0; src < 4u; src++) {
@@ -339,7 +350,7 @@ static void rdx_ui_graph_algorithm(void)
                    &AF_S, n, p.op[src].enable ? T_INK : T_SURF, c);
     }
     fmt_int(a + 10, (int32_t)alg + 1);
-    cv_text_on(12, 102, &AF_S, a, T_MID, T_SURF);
+    cv_text_on(12, 94, &AF_S, a, T_MID, T_SURF);
 }
 
 static void rdx_ui_graph_env(uint32_t pitch)
@@ -374,8 +385,10 @@ static void rdx_ui_graph_env(uint32_t pitch)
             px = nx; py = ny;
         }
       }
-    cv_text_on(12, 100, &AF_S, pitch ? "PITCH ENVELOPE" : rdx_ui_row_name(GR_RDX_EG, rdx_eg_row),
-               pitch ? T_MID : rdx_ui_op_colour(selected), T_SURF);
+    /* OP/RATE/LEVEL is already clear from the coloured cards and the new
+     * footer control hint.  Keep the label only on the separate Pitch EG. */
+    if (pitch)
+        cv_text_on(12, 100, &AF_S, "PITCH ENVELOPE", T_MID, T_SURF);
 }
 
 static void rdx_ui_graph_lfo(void)

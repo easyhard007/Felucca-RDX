@@ -1357,6 +1357,11 @@ static void graph_browse(void)
     int32_t row;
     if (!total) {
         char b[24];
+#if FELUCCA_RDX
+        str_cpy(b, "NO SOUNDS", sizeof b);
+        panel_note(b, "CHANGE LIST OR TYPE", 0);
+        return;
+#else
         if (list_mode() == 1u) {
             panel_note("NO FAVORITES", "LIST ALL TO ADD SOUNDS", 0);
             return;
@@ -1366,6 +1371,7 @@ static void graph_browse(void)
         str_cpy(b + str_len(b), " SOUNDS", sizeof b - str_len(b));
         panel_note(b, "[K4] ANOTHER LIST", "TAG YOURS WHEN SAVING");
         return;
+#endif
     }
     for (row = -3; row <= 3; row++) {
         int32_t y = LIST_Y(row + 3), x1 = 212;
@@ -1379,7 +1385,11 @@ static void graph_browse(void)
             up_slot_label(tag, k);
             up_name(k, nm);
         } else {
+#if FELUCCA_RDX
+            str_cpy(tag, rdx_sound_set_tag(k), sizeof tag);
+#else
             str_cpy(tag, eng_abbr(ENGINES[e]->name), sizeof tag);
+#endif
             str_cpy(nm, ENGINES[e]->presets[k].name, sizeof nm);
         }
         if (hint >= 0) {

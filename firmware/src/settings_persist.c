@@ -8,6 +8,9 @@
  * favorites.factory[15][28..31]: CLICK / CLICK LEVEL / COUNT-IN (1.1), STYLE, MENU's flags, the layers seen (bytes no
  * engine uses; 0 in older settings = every one's default); [15][27]: SCREEN OFF (1.1.5; 0 = 30 MIN, the default);
  * [15][26]: MENU > DISPLAY > HOME (1.3; 0 = SCOPE, 1 TRACKS, 2 LEVELS (1.5), ui.c ui_home_view);
+ * [15][13]: persistent-data owner/version. 0xF6 is the legacy FM6-only/RDX marker; RDX 1.0.2 and later use
+ *   RDX_SETTINGS_TAG so one Hub package can retain an earlier RDX installation while rejecting projects, autosaves
+ *   and user voices left by another Felucca-derived firmware.
  * [15][24]: MENU's 1.2 flags SCOPE MIX, STEP PREVIEW ON, CHORD ENTRY ADD (bits 0-2, ui.c ui_prefs2; 0 = the defaults),
  *   1.5 HELP ON (bit 3), 1.5.5 SELECT PAGE (bit 4; 0 = BPM, as before), 1.5.5 SCREEN WAKE PANEL (bit 5; 0 = +MIDI);
  *   1.6.1 2ND CORE ON (bit 7; 0 = OFF, one core, as before);
@@ -37,8 +40,17 @@ typedef struct {
  * build, select ALL and skip the incompatible autosave once; later FM6-only sessions restore
  * normally. */
 #define FM6_ONLY_SETTINGS_TAG 0xF6u
+#if FELUCCA_RDX
+#define RDX_SETTINGS_TAG 0xD1u                 /* high nibble: RDX owner, low nibble: storage schema 1 */
+#define ACTIVE_SETTINGS_TAG RDX_SETTINGS_TAG
+#else
+#define ACTIVE_SETTINGS_TAG FM6_ONLY_SETTINGS_TAG
+#endif
 static uint8_t fm6_only_migrate;
 static uint8_t fm6_only_settings_seen;
+#if FELUCCA_RDX
+static uint8_t rdx_store_foreign;              /* no RDX marker: do not expose another firmware's objects */
+#endif
 
 static void fm6_only_settings_boot(void)
 {
@@ -47,7 +59,8 @@ static void fm6_only_settings_boot(void)
     if (!fm6_only_settings_seen) {
         favorites.filter = 0;
         favorites.factory[15][11] = 0;
-        favorites.factory[15][13] = FM6_ONLY_SETTINGS_TAG;
+        if (!FELUCCA_RDX || !rdx_store_foreign)
+            favorites.factory[15][13] = ACTIVE_SETTINGS_TAG;
     }
 }
 #endif
@@ -72,11 +85,20 @@ static int settings_import(persist_t *p, int n)
     if (old1 || old2) p->bold = 0;
     if (!current) memset(&p->favorites, 0, sizeof p->favorites);
 #if FELUCCA_FM6_ONLY
-    /* 0.6.35..0.6.38 briefly used the high two bits for the retired EG A/B
-     * choice.  Ignore those bits so upgrading does not reset preset filters. */
-    if ((p->favorites.factory[15][13] & 0x3Fu) != (FM6_ONLY_SETTINGS_TAG & 0x3Fu)) {
+    /* 0.6.35..0.6.38 briefly used the high two bits of the old 0xF6 marker for
+     * the retired EG A/B choice.  Those records are still an RDX installation.
+     * Any other value in an RDX build belongs to upstream/another fork and its
+     * engine-specific persistent objects must not be interpreted as RDX data. */
+#if FELUCCA_RDX
+    if (p->favorites.factory[15][13] != RDX_SETTINGS_TAG) {
         fm6_only_migrate = 1;
+        if ((p->favorites.factory[15][13] & 0x3Fu) != (FM6_ONLY_SETTINGS_TAG & 0x3Fu))
+            rdx_store_foreign = 1;
     }
+#else
+    if ((p->favorites.factory[15][13] & 0x3Fu) != (FM6_ONLY_SETTINGS_TAG & 0x3Fu))
+        fm6_only_migrate = 1;
+#endif
 #endif
     if (p->favorites.factory[15][29] > 1u)        /* STYLE (ui.c ui_style): 2, the retired PIXEL = LINE; unknown = FLAT */
         p->favorites.factory[15][29] = p->favorites.factory[15][29] == 2u ? 1u : 0u;
@@ -89,7 +111,7 @@ static int settings_import(persist_t *p, int n)
     }
     if (p->favorites.factory[15][27] > 7u)         /* SCREEN OFF (1.1.5, ui.c SCR_CODE): unknown = 0 (NEVER since 1.1.5.1) */
         p->favorites.factory[15][27] = 0;
-    if (p->favorites.factory[15][11] > 8u)         /* PRESETS LIST's category (1.2, ui.c ui_lcat, CAT_*): unknown = none */
+    if (p->favorites.factory[15][11] >= CAT_N)     /* PRESETS TYPE category (ui.c ui_lcat, CAT_*): unknown = none */
         p->favorites.factory[15][11] = 0;
     /* [15][26] HOME (1.3, ui.c ui_home_view): kept as saved; a value this firmware does not know draws SCOPE */
     {   /* CUSTOM (1.6, #244, favorites.c ui_cpal): [15][0..9] five RGB565 colours, [12] bit 0 stored, bit 1 in use. Anything else
@@ -128,7 +150,15 @@ static int settings_import(persist_t *p, int n)
          * below main.c's boot path detects this migration and really commits the marker. */
         favorites.filter = 0;                 /* PRESETS > LIST: ALL */
         favorites.factory[15][11] = 0;        /* no category filter */
+#if !FELUCCA_RDX
         favorites.factory[15][13] = FM6_ONLY_SETTINGS_TAG;
+#else
+        /* A legacy RDX record is compatible and can be promoted immediately.
+         * A foreign record gets its tag only after every incompatible object
+         * has been atomically invalidated by rdx_store_migrate_boot(). */
+        if (!rdx_store_foreign)
+            favorites.factory[15][13] = RDX_SETTINGS_TAG;
+#endif
     }
 #endif
 #if defined(FM4_NPRESETS) && !FELUCCA_FM4
@@ -150,6 +180,47 @@ static int settings_import(persist_t *p, int n)
     if (p->panel.magic == PANEL_MAGIC) panel = p->panel;
     return current ? 1 : 2;
 }
+
+#if FELUCCA_RDX
+/* One package must work both as a first Hub install and as an RDX update.
+ * st_save(..., 0) commits an empty newest copy instead of erasing both A/B
+ * copies: a power cut leaves either the old marker (so migration retries) or
+ * a complete empty object. The settings marker is written only after all
+ * objects succeeded. Panel calibration and the safe top-level settings live
+ * outside favorites and are deliberately retained. */
+static void rdx_store_migrate_boot(void)
+{
+    static const uint8_t incompatible[] = {
+        OBJ_PROJECT0, OBJ_PROJECT0 + 1u, OBJ_PROJECT0 + 2u, OBJ_PROJECT0 + 3u,
+        OBJ_UPRESET0, OBJ_UPRESET0 + 1u, OBJ_UPFM6, OBJ_UPRDX1, OBJ_AUTOSAVE
+    };
+    uint32_t i;
+    int failed = 0;
+
+    if (!fm6_only_settings_seen) {
+        fm6_only_migrate = 1;
+        rdx_store_foreign = 1;
+    }
+    if (!rdx_store_foreign)
+        return;
+
+    /* Do not let foreign page/filter/effect/favorite bytes affect this boot,
+     * even if a flash write fails. The imported panel calibration remains. */
+    memset(&favorites, 0, sizeof favorites);
+    memset(proj_slot, 0, sizeof proj_slot);
+    for (i = 0; i < sizeof incompatible / sizeof incompatible[0]; i++) {
+        st_hdr_t h;
+        /* A clean package and a factory-fresh device have no committed
+         * objects, so they pay no needless sector erase or boot delay. */
+        if (st_current(incompatible[i], &h) >= 0 && h.len && st_save(incompatible[i], 0, 0))
+            failed = 1;
+    }
+    if (!failed) {
+        favorites.factory[15][13] = RDX_SETTINGS_TAG;
+        rdx_store_foreign = 0;
+    }
+}
+#endif
 
 /* Start with the last imported/saved object, including fields owned by a
  * feature absent from this build. No save-on-boot or extra flash writes. */

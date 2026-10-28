@@ -61,6 +61,17 @@ const d = await boot();
 const held = await boot();
 const effected = await boot();
 const fxab = await boot();
+{
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const migration = instance.exports;
+  migration._initialize();
+  check("foreign Felucca data is cleared while panel calibration is retained",
+        migration.web_test_rdx_storage_migration(0) === 15);
+  check("legacy RDX data is promoted to the new owner marker without clearing",
+        migration.web_test_rdx_storage_migration(1) === 15);
+  check("current RDX data survives an ordinary firmware update unchanged",
+        migration.web_test_rdx_storage_migration(2) === 15);
+}
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
 check("RDX firmware has one runtime track", d.ex.web_test_track_count() === 1);
 check("AUDIO LATE remains an INFO diagnostic without a giant popup",
@@ -236,6 +247,33 @@ check("Selected set has 21 imported SysEx entries",
       d.ex.web_test_rdx_set_preset(1, 0) === 35 &&
       cstr(d.ex.web_test_rdx_preset_name_byte, 35) === "Ph.D Brass" &&
       cstr(d.ex.web_test_rdx_preset_name_byte, 55) === "Transistor");
+check("PRESETS LIST separates Factory and Selected while TYPE combines with it",
+      d.ex.web_test_rdx_filter_total(1, 0) === 32 &&
+      d.ex.web_test_rdx_filter_total(2, 0) === 21 &&
+      d.ex.web_test_rdx_filter_total(1, 1) === 4 &&       // Factory BASS
+      d.ex.web_test_rdx_filter_total(1, 3) === 6);       // Factory PAD
+check("Factory preset types include dedicated keys, lead, organ, brass and percussion tags",
+      d.ex.web_test_rdx_preset_category(6) === 5 &&      // LegendEP: KEYS
+      d.ex.web_test_rdx_preset_category(7) === 2 &&      // DynaLead: LEAD
+      d.ex.web_test_rdx_preset_category(25) === 9 &&     // CheezOrgan: ORGAN
+      d.ex.web_test_rdx_preset_category(26) === 10 &&    // FM_Brass: BRASS
+      d.ex.web_test_rdx_preset_category(24) === 11);     // Marimba: PERC
+check("Selected preset types use the reviewed compact taxonomy without VOCAL",
+      d.ex.web_test_rdx_filter_total(2, 2) === 3 &&      // Selected LEAD
+      d.ex.web_test_rdx_filter_total(2, 3) === 6 &&      // Selected PAD
+      d.ex.web_test_rdx_filter_total(2, 5) === 5 &&      // Selected KEYS
+      d.ex.web_test_rdx_filter_total(2, 10) === 4 &&     // Selected BRASS
+      d.ex.web_test_rdx_preset_category(42) === 2 &&     // StrgMachin: LEAD
+      d.ex.web_test_rdx_preset_category(48) === 3 &&     // 5th.FM: PAD
+      d.ex.web_test_rdx_preset_category(49) === 2 &&     // Polific: LEAD
+      d.ex.web_test_rdx_preset_category(51) === 3 &&     // DX Singer: PAD
+      d.ex.web_test_rdx_preset_category(55) === 2);      // Transistor: LEAD
+check("fixed-unity Flanger hides its SEND card instead of presenting a fake control",
+      uiDrawSource.includes("fixed at unity: no fake editable SEND card"));
+check("RDX EDIT footer exposes ALGORITHM, row selection and next-page controls",
+      uiDrawSource.includes('KC_ALGO, "CHANGE"') &&
+      uiDrawSource.includes('KC_SELECT, "ROW"') &&
+      uiDrawSource.includes('KC_EDIT, "NEXT"'));
 d.ex.web_test_rdx_custom_name_load();
 check("a librarian audition publishes its live SysEx voice name on HOME",
       cstr(d.ex.web_test_rdx_custom_name_byte, 0) === "Audition");
@@ -254,9 +292,9 @@ const fmBrassModAttack = d.ex.web_test_rdx_op_env_gain(1);
 check(`FM_Brass modulator attack rises linearly in audible gain (${fmBrassModAttack})`,
       fmBrassModAttack > 14000 && fmBrassModAttack < 18000);
 d.ex.web_midi(0x80, 60, 0); d.render(1800);
-check("FX opens exactly FX, FX1, FX2, GLOBAL FX and SLICER in that order",
-      d.ex.web_test_rdx_fx_page_count() === 5 &&
-      ["FX", "FX1", "FX2", "GLOBAL FX", "SLICER"].every((name, i) =>
+check("FX hides unfinished GLOBAL FX and opens FX, FX1, FX2 and SLICER in order",
+      d.ex.web_test_rdx_fx_page_count() === 4 &&
+      ["FX", "FX1", "FX2", "SLICER"].every((name, i) =>
         cstr(d.ex.web_test_rdx_fx_page_name_byte, i) === name));
 d.ex.web_test_rdx_preset(4);                          // MotionPad: CHORUS -> DELAY
 check("preset FX bytes initialise the live serial type/send controls",

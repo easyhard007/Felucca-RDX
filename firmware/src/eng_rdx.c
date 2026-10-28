@@ -159,6 +159,23 @@ static const char *rdx_sound_set_name(uint32_t preset)
     return "Unsorted";
 }
 
+/* 0..N-1 for a built-in sound set, -1 for an unlisted/internal patch. */
+static int32_t rdx_sound_set_index(uint32_t preset)
+{
+    uint32_t s, i;
+    for (s = 0; s < NELEM(RDX_SOUND_SETS); s++)
+        for (i = 0; i < RDX_SOUND_SETS[s].count; i++)
+            if (RDX_SOUND_SETS[s].preset[i] == preset)
+                return (int32_t)s;
+    return -1;
+}
+
+static const char *rdx_sound_set_tag(uint32_t preset)
+{
+    int32_t s = rdx_sound_set_index(preset);
+    return s == 0 ? "FAC" : s == 1 ? "SEL" : "RDX";
+}
+
 static int rdx_preset_visible(uint32_t preset)
 {
     uint32_t s, i;
