@@ -75,9 +75,10 @@ pi32v2 固件的 FM-1 模拟器。
 - 安装器：<https://easyhard007.github.io/Felucca-RDX/webapp/installer/>
 - 音色编辑器：<https://easyhard007.github.io/Felucca-RDX/webapp/editor/#library>
 - 在线模拟器：<https://easyhard007.github.io/Felucca-RDX/webapp/emulator/>
+- 中英文说明书：<https://easyhard007.github.io/Felucca-RDX/webapp/manual/>
 
 `main` 分支每次推送后，GitHub Actions 会自动编译双核 RDX 固件，生成普通安装包和
-全新安装包，再将安装器、编辑器与模拟器一起发布到 GitHub Pages。网页安装器和它提供的
+全新安装包，再将安装器、编辑器、模拟器与说明书一起发布到 GitHub Pages。网页安装器和它提供的
 固件来自同一次构建。
 
 如需本地使用，先编译固件，再运行：

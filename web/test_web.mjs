@@ -36,8 +36,17 @@ const FW_ROOT = process.env.FELUCCA_ROOT || join(HERE, "..");
 const installerHtml = readFileSync(join(HERE, "index_pkg.html"), "utf8");
 ok(installerHtml.includes('let lang = "en";') &&
    installerHtml.includes('href="../emulator/"') &&
+   installerHtml.includes('href="../manual/"') &&
    installerHtml.includes('other: "中文"'),
-   "installer: English by default, Chinese toggle and emulator link");
+   "installer: English by default, Chinese toggle, emulator and manual links");
+
+const manualHtml = readFileSync(join(HERE, "manual/index.html"), "utf8");
+ok(manualHtml.includes('A four-operator FM instrument') &&
+   manualHtml.includes('does not provide multitrack operation, a mixer, or track switching') &&
+   manualHtml.includes('不具备多轨、Mixer 或轨道切换功能') &&
+   manualHtml.includes('const carriers = [1,1,1,1,1,3,3,5,7,7,7,15]') &&
+   !/id="(?:en|zh)-(?:chord|arp|save)"/.test(manualHtml),
+   "manual: bilingual four-operator scope, 12 algorithms and no legacy chapters");
 
 /* ------------------------------------------------------------ editor protocol --- */
 const html = readFileSync(join(HERE, "editor.html"), "utf8");

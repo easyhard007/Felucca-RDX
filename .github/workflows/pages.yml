@@ -83,10 +83,13 @@ jobs:
           test -s build/site/webapp/editor/index.html
           test -s build/site/webapp/emulator/index.html
           test -s build/site/webapp/emulator/felucca.wasm
+          test -s build/site/webapp/manual/index.html
           test -s "build/site/firmware/felucca-rdx-$version.fwsc"
           grep -q "Felucca-RDX Installer" build/site/webapp/installer/index.html
           grep -q "Felucca-RDX Editor" build/site/webapp/editor/index.html
           grep -q "Felucca-RDX Emulator" build/site/webapp/emulator/index.html
+          grep -q "A four-operator FM instrument" build/site/webapp/manual/index.html
+          grep -q "不具备多轨、Mixer 或轨道切换功能" build/site/webapp/manual/index.html
 
       - name: Test the web tools
         shell: bash

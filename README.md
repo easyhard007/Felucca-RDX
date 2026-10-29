@@ -50,6 +50,7 @@ The public GitHub Pages tools are built from `main` by GitHub Actions:
 - [Felucca-RDX Installer](https://easyhard007.github.io/Felucca-RDX/webapp/installer/)
 - [Felucca-RDX Editor](https://easyhard007.github.io/Felucca-RDX/webapp/editor/#library)
 - [Felucca-RDX Online Emulator](https://easyhard007.github.io/Felucca-RDX/webapp/emulator/)
+- [Felucca-RDX User Manual](https://easyhard007.github.io/Felucca-RDX/webapp/manual/)
 
 The installer downloads the firmware package produced by the same workflow, so
 the website and firmware always come from the same commit and version. The online
@@ -77,7 +78,7 @@ semantic versioning; the splash, WebAssembly page and installer package all use
 that single value.
 
 `.github/workflows/pages.yml` builds the dual-core RDX firmware, builds the
-WebAssembly emulator, assembles all three web applications with
+WebAssembly emulator, assembles the installer, editor, emulator and manual with
 `web/make_site.py`, and deploys `build/site` to GitHub
 Pages on every push to `main`. The workflow can also be run manually from the
 repository's Actions page.

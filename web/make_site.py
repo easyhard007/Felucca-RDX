@@ -9,6 +9,7 @@
   webapp/installer/index.html index_pkg.html, self-contained (fm1pkg.js, fm1ota.js, metadata inlined)
   webapp/editor/index.html    editor.html (+ fukiai.ttf, FUKIAI-LICENSE.txt)
   webapp/emulator/            latest source-level RDX WebAssembly emulator from build/emu
+  webapp/manual/index.html    bilingual Felucca-RDX user manual
   src/                        not touched
 
   web/make_site.py build/felucca-X.Y.fwsc X.Y OUT_DIR [build/felucca-X.Y-clean.fwsc]
@@ -63,8 +64,9 @@ def main(pkg, version, out, clean_pkg=None):
         if html.count(mark) != 1:
             raise SystemExit(f"index_pkg.html must contain {mark} once; update make_site.py")
     html = html.replace("/*LIB*/", lib).replace("/*META*/", meta)
-    inst, ed, emu, fw = (out / "webapp" / "installer", out / "webapp" / "editor",
-                         out / "webapp" / "emulator", out / "firmware")
+    inst, ed, emu, manual, fw = (out / "webapp" / "installer", out / "webapp" / "editor",
+                                 out / "webapp" / "emulator", out / "webapp" / "manual",
+                                 out / "firmware")
     for d in (inst, ed, fw):
         d.mkdir(parents=True, exist_ok=True)
     for old in fw.glob("felucca-*.fwsc"):          # one package: the current one
@@ -96,11 +98,20 @@ def main(pkg, version, out, clean_pkg=None):
     if emu.exists():
         shutil.rmtree(emu)
     shutil.copytree(emu_src, emu)
+    manual_src = HERE / "manual"
+    if not (manual_src / "index.html").is_file():
+        raise SystemExit(f"{manual_src}: manual source is missing")
+    if manual.exists():
+        shutil.rmtree(manual)
+    shutil.copytree(manual_src, manual)
+    manual_html = (manual / "index.html").read_text(encoding="utf-8")
+    manual_html = manual_html.replace("@VERSION@", re.sub(r"^rdx-", "", version, flags=re.I))
+    (manual / "index.html").write_text(manual_html, encoding="utf-8")
     (out / "index.html").write_text(
         '<!doctype html><meta charset="utf-8"><title>Felucca-RDX</title>'
         '<meta http-equiv="refresh" content="0; url=webapp/installer/">'
         '<a href="webapp/installer/">Felucca-RDX installer</a>\n', encoding="utf-8")
-    print(f"site: {out}: webapp/installer ({len(html)} B), webapp/editor, webapp/emulator, "
+    print(f"site: {out}: webapp/installer ({len(html)} B), webapp/editor, webapp/emulator, webapp/manual, "
           f"firmware/{name} + {clean_name} ({len(raw)} B, {product})")
 
 
