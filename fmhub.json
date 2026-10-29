@@ -1,0 +1,6 @@
+{
+  "what": "Felucca-RDX turns the M-VAVE FM-1 into a focused eight-voice, four-operator FM synthesizer inspired by the Yamaha reface DX workflow. It provides 12 FM algorithms, detailed operator editing, three sound lists and a serial stereo FX1-to-FX2 effects chain.",
+  "kinds": ["synth"],
+  "play": "https://easyhard007.github.io/Felucca-RDX/webapp/emulator/",
+  "editor": "https://easyhard007.github.io/Felucca-RDX/webapp/editor/"
+}

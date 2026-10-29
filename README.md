@@ -2,11 +2,15 @@
 
 [![Build firmware and deploy Pages](https://github.com/easyhard007/Felucca-RDX/actions/workflows/pages.yml/badge.svg)](https://github.com/easyhard007/Felucca-RDX/actions/workflows/pages.yml)
 
+**Author:** [easyhard007](https://github.com/easyhard007)
+
 Felucca RDX is dedicated firmware that turns the M-VAVE FM-1 into an
 eight-voice, four-operator synthesizer inspired by the Yamaha reface DX. It is
 a modified fork of [Felucca](https://github.com/hugelton/Felucca) by Leo
 Kuroshita / Hügelton Instruments. The product UI exposes only the RDX
 instrument and its sound sets.
+
+![Felucca-RDX Algorithm 9 editor](docs/felucca-rdx-algorithm-9.png)
 
 The current firmware version is **Felucca RDX 1.0.3**. Its independent FM-1
 firmware identity is **`FM-1_947`**. RDX is monotimbral: the
@@ -44,6 +48,12 @@ retain their user voices and settings, while a first install over another
 Felucca-derived firmware atomically discards incompatible projects, autosave
 and user-voice records. Panel calibration is retained. The clean package remains
 available in the Felucca-RDX installer for an explicitly requested factory reset.
+
+The Hub card metadata is kept in [`fmhub.json`](fmhub.json). Release tags use
+the `rdx-vX.Y.Z` prefix because this fork retains upstream Felucca's historical
+`vX.Y.Z` tags locally. Never publish all local tags with `git push --tags`.
+Pushing an RDX tag builds, verifies, attests and publishes exactly one Hub
+asset named `Felucca-RDX.fwsc`; the clean package is deliberately excluded.
 
 The public GitHub Pages tools are built from `main` by GitHub Actions:
 

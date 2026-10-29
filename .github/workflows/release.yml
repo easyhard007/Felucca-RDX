@@ -1,0 +1,22 @@
+name: Release Felucca-RDX
+
+on:
+  push:
+    tags:
+      - "rdx-v*"
+
+jobs:
+  build:
+    uses: zvenson/fm1-build/.github/workflows/build.yml@v1
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      build: |
+        python -m pip install --disable-pip-version-check fonttools
+        sh tools/build_hub_release.sh "${GITHUB_REF_NAME#rdx-v}"
+      packages: build/hub/Felucca-RDX.fwsc
+      test: python tools/verify_hub_release.py build/hub/Felucca-RDX.fwsc
+      tests-block: true
+
