@@ -10,7 +10,7 @@ a modified fork of [Felucca](https://github.com/hugelton/Felucca) by Leo
 Kuroshita / Hügelton Instruments. The product UI exposes only the RDX
 instrument and its sound sets.
 
-![Felucca-RDX Algorithm 9 editor](docs/felucca-rdx-algorithm-9.png)
+![Felucca-RDX Algorithm 9 editor](cover.png)
 
 The current firmware version is **Felucca RDX 1.0.3**. Its independent FM-1
 firmware identity is **`FM-1_947`**. RDX is monotimbral: the
