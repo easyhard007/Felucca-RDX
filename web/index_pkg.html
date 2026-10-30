@@ -78,11 +78,11 @@ const TEXT = {
     direct: "请将 USB 数据线直接连接到电脑，不需要 Probe 或 Transporter 等额外设备。",
     brick: "如果安装失败并导致 FM-1 无法启动，需要使用 Transporter 恢复：",
     beta: "Felucca-RDX 是仍在开发中的自定义固件。如发现问题，请在 GitHub 上反馈。使用本固件存在风险，作者不对由此造成的 FM-1 损坏或异常负责。",
-    back: "请从 M-VAVE 获取官方 FM-1 V15，并选择未经修改的 FM-1.fwsc。文件只在浏览器本地校验，不会上传到服务器。",
-    stockTitle: "恢复官方 V15", stockFile: "官方 FM-1.fwsc", stockGo: "备份并恢复官方 V15",
+    back: "请从 M-VAVE 获取官方 FM-1 固件，并选择未经修改的 V15 或 V16 FM-1.fwsc。文件只在浏览器本地校验，不会上传到服务器。",
+    stockTitle: "恢复官方固件", stockFile: "官方 FM-1.fwsc", stockGo: "备份并恢复官方固件",
     stockBackup: "恢复前会先保存当前音乐、已保存音乐、音色库、采样和设置。旧版固件需先更新 Felucca-RDX 才能进行完整备份。以后如需恢复，请重新安装 Felucca-RDX 并在编辑器中导入备份。",
     stockRecovery: "继续上次中断的更新：完整备份已保存到本电脑",
-    stockValid: "已确认官方 V15 固件", stockConfirm: "完整备份文件是否已保存到本电脑？继续后将恢复官方 V15；官方 V15 无法读取 Felucca-RDX 数据。",
+    stockValid: "已确认官方固件：", stockConfirm: "完整备份文件是否已保存到本电脑？继续后将恢复官方固件；官方固件无法读取 Felucca-RDX 数据。",
     stockNeedBackup: "设备处于写入模式时无法导出备份。仅当完整备份已经保存时，才可勾选继续中断的更新。",
     stockUnsupported: "当前 Felucca-RDX 版本不支持完整备份，请先安装最新版 Felucca-RDX。",
     backup: "正在保存完整备份 ", stockError: "无法验证官方固件：",
@@ -115,11 +115,11 @@ const TEXT = {
     direct: "Connect the USB cable directly to the computer. No probe or Transporter is needed.",
     brick: "If an install fails and the FM-1 no longer starts, recovering it needs a Transporter:",
     beta: "Felucca-RDX is custom firmware under active development; please report problems on GitHub. The author accepts no responsibility if your FM-1 is damaged or misbehaves because of it. Use it at your own risk.",
-    back: "Get official FM-1 V15 from M-VAVE and select the unmodified FM-1.fwsc. The browser validates it locally; it is not sent to a server.",
-    stockTitle: "Return to official V15", stockFile: "Official FM-1.fwsc", stockGo: "Back up and return to official V15",
+    back: "Get official FM-1 firmware from M-VAVE and select the unmodified V15 or V16 FM-1.fwsc. The browser validates it locally; it is not sent to a server.",
+    stockTitle: "Return to official firmware", stockFile: "Official FM-1.fwsc", stockGo: "Back up and return to official firmware",
     stockBackup: "Current music, saved music, sound banks, samples and settings are saved first. Older firmware needs a Felucca-RDX update for complete backups. To restore an archive later, reinstall Felucca-RDX and use the editor.",
     stockRecovery: "Resume an interrupted update: I already saved a complete backup to this computer",
-    stockValid: "Official V15 verified", stockConfirm: "Has the complete backup file been saved to this computer? Continue to return to official V15. Official V15 cannot open Felucca-RDX data.",
+    stockValid: "Official firmware verified: ", stockConfirm: "Has the complete backup file been saved to this computer? Continue to return to official firmware. Official firmware cannot open Felucca-RDX data.",
     stockNeedBackup: "An update loader cannot export a backup. Only select resume if you already saved a complete backup.",
     stockUnsupported: "This Felucca-RDX build does not support complete backups. Install the current Felucca-RDX first.",
     backup: "Saving complete backup ", stockError: "Cannot validate official firmware: ",
@@ -229,10 +229,9 @@ $("stock-file").addEventListener("change", async () => {
   const epoch = ++stockFileEpoch, file = $("stock-file").files[0]; stock = null; lockInstaller(false);
   if (!file) return;
   try {
-    if (file.size !== STOCK_V15_SIZE) throw new Error("FM-1 V15 / FM-1.fwsc");
     const verified = await validateStockPackage(new Uint8Array(await file.arrayBuffer()));
     if (epoch !== stockFileEpoch) return;
-    stock = verified; sayK("stockValid"); lockInstaller(false);
+    stock = verified; sayK("stockValid", verified.version); lockInstaller(false);
   } catch (e) { if (epoch === stockFileEpoch) sayK("stockError", e.message); }
 });
 function saveArchive(archive) {

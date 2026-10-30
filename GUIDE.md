@@ -93,7 +93,7 @@ pi32v2 固件的 FM-1 模拟器。
 
 普通包已经能够安全处理来自其他 Felucca 固件的不兼容用户区。`Fresh install` 仍然保留，适合用户明确希望彻底恢复初始状态、清除所有系统设置和用户数据的情况；正常的 Felucca-RDX 版本升级不应勾选它。
 
-写入期间保持设备供电，不要拔出 USB 线或关闭页面。若要恢复官方固件，可使用 Felucca 官方安装器的 `Return to official V15`。
+写入期间保持设备供电，不要拔出 USB 线或关闭页面。若要恢复官方固件，可使用 Felucca-RDX 安装器的 `Return to official firmware`，选择从 M-VAVE 下载的未经修改的 V15 或 V16 `FM-1.fwsc`。安装器会先导出完整备份，再写入经过白名单验证的官方固件。
 
 ## 音色与效果
 
