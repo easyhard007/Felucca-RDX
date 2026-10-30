@@ -5,6 +5,6 @@
  * keeping this fork distinct from upstream Felucca firmware. */
 #ifndef RDX_VERSION_H
 #define RDX_VERSION_H
-#define RDX_VERSION "1.0.3"
+#define RDX_VERSION "1.0.4"
 #define RDX_IDENTITY "FM-1_947"
 #endif

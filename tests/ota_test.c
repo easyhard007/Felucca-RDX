@@ -131,6 +131,21 @@ static uint32_t ota_body_off(void)                  /* ota.bin data + 0x20 in th
     return 0;
 }
 
+static uint32_t package_flash_size(void)
+{
+    uint8_t h[0x400];
+    uint32_t i, n;
+    memcpy(h, logical, sizeof h);
+    ota_jl_enc(h, 0x40);
+    n = ota_rd16(h + 8);
+    for (i = 0; i < n; i++) {
+        uint8_t *e = h + 0x40 + i * 0x50u;
+        ota_jl_enc(e, 0x50);
+        if (ota_rd16(e) == 0) return ota_rd32(e + 12);
+    }
+    return 0;
+}
+
 /* rewrite flash.bin's size in the logical image's UFW entry list (the entries' and the header's CRCs too): a package
  * of the same chip whose app area is another board's size */
 static void set_fl_size(uint8_t *lg, uint32_t size)
@@ -179,6 +194,7 @@ int main(int argc, char **argv)
     FILE *f;
     uint8_t *raw;
     size_t n, i;
+    uint32_t fl_size;
     int bad = 0, rc;
     if (argc < 2) { printf("usage: ota_test FILE.fwsc\n"); return 2; }
     f = fopen(argv[1], "rb");
@@ -191,6 +207,7 @@ int main(int argc, char **argv)
     for (i = 0; i < 20; i++) memcpy(logical + i * 47, raw + i * 48, 47);   /* drop the marker bytes */
     memcpy(logical + 20 * 47, raw + 20 * 48, n - 20 * 48);
     logical_len = n - 20;
+    fl_size = package_flash_size();
 
     /* handshake outside a session */
     reset_dev();
@@ -207,8 +224,9 @@ int main(int argc, char **argv)
     reset_dev();
     rc = ota_session();
     printf("  %u requests\n", requests);
-    bad += check("session commits (flash.bin exactly 0x93000)", rc == 0 && committed);
-    bad += check("headers + loader + confirm, no head reads", requests >= 10 && requests <= 30);
+    bad += check("session commits (supported flash.bin layout)", rc == 0 && committed);
+    bad += check("headers + loader + confirm request count",
+                 requests >= 10 && requests <= (fl_size == OTA_V16_FL_LEN ? 90u : 30u));
     {
         uint8_t *h = nor + 0xE0000, *p = committed_parm;
         bad += check("staged body == the package's loader", !memcmp(nor + 0xE0020, logical + ota_body_off(), 64));
@@ -223,6 +241,14 @@ int main(int argc, char **argv)
     /* boot cleanup erases it */
     bad += check("boot cleanup erases the area", ota_boot_cleanup() == 1 && area_erased());
     bad += check("second boot: nothing to do", ota_boot_cleanup() == 0);
+
+    if (fl_size == OTA_V16_FL_LEN) {
+        reset_dev();
+        corrupt_at = logical + 0x400u + 0x1000u;
+        rc = ota_session();
+        bad += check("V16 changed flash head: -5, no commit, no erase",
+                     rc == -5 && !committed && erases == 0 && area_erased());
+    }
 
     /* 1.6.1: another board's package (flash.bin not this board's app area size): refused in step 1, nothing erased */
     {

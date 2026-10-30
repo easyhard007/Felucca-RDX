@@ -7,7 +7,7 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 1.0.3
+- 当前版本：Felucca RDX 1.0.4
 - 固件独立身份：`FM-1_947`（与上游 Felucca 的 `FM-1_900` 区分，同时保留 9xx Loader 恢复兼容性）
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 

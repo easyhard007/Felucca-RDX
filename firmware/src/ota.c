@@ -9,6 +9,9 @@
  *     loader at 0xE0000 (outside Felucca's store), ask 0xE0000000 ("success"),
  *     then write the UPDATA_PARM record (flash 0xE4F00 + RAM 0x01C7FD88) and
  *     reset. The SPL runs the loader, which installs the package.
+ * V15 uses this firmware's 0x93000 flash layout.  The official V16 package
+ * extends flash.bin to 0xA9000; it is accepted only with its known flash CRC,
+ * official loader and two CRC32s covering its complete 16 KiB flash head.
  * Nothing is committed before the host's "success"; a failure after the
  * staging began erases the staging area, and Felucca carries on. A package
  * whose flash.bin is not exactly this board's size (OTA_FL_LEN: another
@@ -29,6 +32,10 @@
 #define OTA_RES (OTA_AREA + OTA_AREA_LEN - 0x100u)  /* 0xE4F00 = 4K boundary - 256: SPL scan */
 #define OTA_FL_LEN 0x93000u                      /* flash.bin = [0, the PRCT end): the head and this board's app area,
                                                   * the size the update loader writes (ldr_core.c LDR_APP_HI) */
+#define OTA_V16_FL_LEN 0xA9000u                  /* official FM-1 V16 (2026-10-21), not a Felucca package */
+#define OTA_V16_FL_CRC 0x79C4u                   /* UFW flash.bin data CRC16 */
+#define OTA_V16_HEAD0_CRC32 0x5389A4DAu          /* flash.bin [0x0000,0x2000) */
+#define OTA_V16_HEAD1_CRC32 0x39A194E3u          /* flash.bin [0x2000,0x4000) */
 #define OTA_LDR_HCRC 0xEBAAu                     /* official update loader (usb_hid_ota.bin) */
 #define OTA_LDR_DCRC 0x5881u
 #define OTA_LDR_LEN 0x4DE1u
@@ -59,6 +66,17 @@ static uint32_t ota_crc16(const uint8_t *p, uint32_t n, uint32_t c)   /* poly 0x
         for (i = 0; i < 8u; i++)
             c = c & 0x8000u ? (c << 1) ^ 0x1021u : c << 1;
         c &= 0xFFFFu;
+    }
+    return c;
+}
+
+static uint32_t ota_crc32(const uint8_t *p, uint32_t n, uint32_t c)   /* reflected IEEE; init/final xor outside */
+{
+    uint32_t i;
+    while (n--) {
+        c ^= *p++;
+        for (i = 0; i < 8u; i++)
+            c = c >> 1 ^ (c & 1u ? 0xEDB88320u : 0u);
     }
     return c;
 }
@@ -264,7 +282,7 @@ static int ota_ufw(uint8_t *hdr, uint32_t *fl_off, uint32_t *fl_len, uint32_t *o
 static int ota_stage(void)                       /* steps 1..6; 0 = host said success */
 {
     static uint8_t hdr[0x400] __attribute__((section(".pool"))), b[512] __attribute__((section(".pool"))), mine[512] __attribute__((section(".pool")));
-    uint32_t i, n, ota_off, ota_len, fl_off, fl_len, c, len, own, official;
+    uint32_t i, n, ota_off, ota_len, fl_off, fl_len, fl_crc = ~0u, c, len, own, official, stock_v16;
     int rc;
     /* 1. UFW header + entry list */
     ota_show(1, 0);
@@ -272,7 +290,11 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
         return rc;
     if (!fl_off || !ota_off)
         return -3;
-    if (fl_len != OTA_FL_LEN)
+    for (i = 0; i < ota_rd16(hdr + 8); i++)
+        if (ota_rd16(hdr + 0x40u + i * 0x50u) == 0u)
+            fl_crc = ota_rd16(hdr + 0x40u + i * 0x50u + 4u);
+    stock_v16 = fl_len == OTA_V16_FL_LEN && fl_crc == OTA_V16_FL_CRC;
+    if (fl_len != OTA_FL_LEN && !stock_v16)
         return -15;                                         /* another board's package: nothing staged, nothing erased */
     /* 2. which loader: the official one (known CRCs; it rewrites the whole flash.bin
      *    including the head) or Felucca's own (app area only, checks the chip key) */
@@ -288,13 +310,27 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
         own = ota_memeq(b + i, (const uint8_t *)"FELUCCA-LOADER-1", 16) && ota_rd32(b + 0x20 + 4) <= 0x14000u;
     if (!official && !own)
         return -7;
+    if (stock_v16 && !official)
+        return -7;                                          /* the larger layout is only safe with the vendor loader */
     if (official) {                    /* the official loader writes the head: it must equal ours */
         ota_show(2, 0);
-        for (i = 0; i < 0x4000u; i += 512u) {
-            if (ota_read(fl_off + i, b, 512) || ota_fread(i, mine, 512))
-                return -4;
-            if (!ota_memeq(b, mine, 512))
+        if (stock_v16) {
+            uint32_t h0 = 0xFFFFFFFFu, h1 = 0xFFFFFFFFu;
+            for (i = 0; i < 0x4000u; i += 512u) {
+                if (ota_read(fl_off + i, b, 512))
+                    return -4;
+                if (i < 0x2000u) h0 = ota_crc32(b, 512, h0);
+                else h1 = ota_crc32(b, 512, h1);
+            }
+            if ((h0 ^ 0xFFFFFFFFu) != OTA_V16_HEAD0_CRC32 || (h1 ^ 0xFFFFFFFFu) != OTA_V16_HEAD1_CRC32)
                 return -5;
+        } else {
+            for (i = 0; i < 0x4000u; i += 512u) {
+                if (ota_read(fl_off + i, b, 512) || ota_fread(i, mine, 512))
+                    return -4;
+                if (!ota_memeq(b, mine, 512))
+                    return -5;
+            }
         }
     }
     /* 4. stage the package's loader: erase, body, verify, head last */
