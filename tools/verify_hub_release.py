@@ -20,11 +20,16 @@ def main() -> int:
     package = Path(sys.argv[1])
     raw = package.read_bytes()
     header = (ROOT / "firmware" / "src" / "rdx_version.h").read_text(encoding="utf-8")
-    match = re.search(r'^#define RDX_IDENTITY "([^"]+)"$', header, re.MULTILINE)
-    if not match:
-        raise SystemExit("RDX_IDENTITY is missing")
+    match = re.search(r'^#define RDX_IDENTITY "(FM-1_\d{3,8})"$', header, re.MULTILINE)
+    version = re.search(r'^#define RDX_VERSION "(\d+)\.(\d+)\.(\d+)"$', header, re.MULTILINE)
+    if not match or not version:
+        raise SystemExit("RDX_IDENTITY or RDX_VERSION is missing or invalid")
 
     expected = match.group(1)
+    major, minor, patch = map(int, version.groups())
+    encoded = f"FM-1_965{major}{minor:02d}{patch:02d}"
+    if major > 9 or minor > 99 or patch > 99 or expected != encoded:
+        raise SystemExit(f"identity {expected!r} does not encode version {version.group(0)!r}; expected {encoded}")
     actual = product_of(raw)
     if actual != expected:
         raise SystemExit(f"package identity {actual!r}, expected {expected!r}")

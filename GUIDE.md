@@ -7,8 +7,8 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 1.0.5
-- 固件独立身份：`FM-1_947`（与上游 Felucca 的 `FM-1_900` 区分，同时保留 9xx Loader 恢复兼容性）
+- 当前版本：Felucca RDX 1.0.6
+- 固件独立身份：`FM-1_96510006`（编码规则为 `965 + 主版本1位 + 次版本2位 + 修订版本2位`；更新 Loader 仍使用通用的 `ota-FM-1_900`）
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。

@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Single source of truth for the RDX release identity. Increment the final
- * version component for every generated firmware release.  The FM-1_9xx
- * identity remains compatible with Felucca's interrupted-update loader while
- * keeping this fork distinct from upstream Felucca firmware. */
+ * Single source of truth for the RDX release identity. The eight identity
+ * digits are 965 + M + mm + pp, so 1.0.6 is FM-1_96510006. build.py and the
+ * Hub verifier reject a version/identity mismatch. The loader keeps its own
+ * generic ota-FM-1_900 identity while the running app reports this one. */
 #ifndef RDX_VERSION_H
 #define RDX_VERSION_H
-#define RDX_VERSION "1.0.5"
-#define RDX_IDENTITY "FM-1_947"
+#define RDX_VERSION "1.0.6"
+#define RDX_IDENTITY "FM-1_96510006"
 #endif

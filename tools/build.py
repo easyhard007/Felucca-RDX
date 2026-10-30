@@ -51,16 +51,23 @@ SDK_SHA256 = {
 }
 
 def rdx_identity():
-    """Read the fork's fixed package identity from its release header."""
+    """Read and validate the fork's version-encoded package identity."""
     header = (FW / "src" / "rdx_version.h").read_text(encoding="utf-8")
-    match = re.search(r'^#define\s+RDX_IDENTITY\s+"(FM-1_9\d\d)"\s*$', header, re.M)
-    if not match:
-        raise SystemExit("RDX_IDENTITY is missing or invalid in firmware/src/rdx_version.h")
-    return match.group(1)
+    version = re.search(r'^#define\s+RDX_VERSION\s+"(\d+)\.(\d+)\.(\d+)"\s*$', header, re.M)
+    identity = re.search(r'^#define\s+RDX_IDENTITY\s+"(FM-1_\d{3,8})"\s*$', header, re.M)
+    if not version or not identity:
+        raise SystemExit("RDX_VERSION or RDX_IDENTITY is missing or invalid in firmware/src/rdx_version.h")
+    major, minor, patch = map(int, version.groups())
+    if major > 9 or minor > 99 or patch > 99:
+        raise SystemExit("RDX identity encoding supports major 0..9 and minor/patch 0..99")
+    expected = f"FM-1_965{major}{minor:02d}{patch:02d}"
+    if identity.group(1) != expected:
+        raise SystemExit(f"RDX_IDENTITY {identity.group(1)} does not encode RDX_VERSION {version.group(0)!r}; expected {expected}")
+    return expected
 
 
-# Upstream keeps its historic identity.  An RDX build instead has a fixed,
-# independently registered identity; FELUCCA_PRODUCT remains an escape hatch
+# Upstream keeps its historic identity. An RDX build instead has an independently
+# registered, version-encoded identity; FELUCCA_PRODUCT remains an escape hatch
 # for packaging tests and private development builds.
 PRODUCT = os.environ.get("FELUCCA_PRODUCT") or (rdx_identity() if os.environ.get("FELUCCA_RDX") == "1"
                                                 else "FM-1_900")
