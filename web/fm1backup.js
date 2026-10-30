@@ -2,11 +2,13 @@
 // Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
 // Local, complete musical archives. Requests name whitelisted objects, never flash addresses.
 // 8: the FM6 patch bank of 1.0..1.0.2 (listed empty since 1.0.3: a restore of an older archive's bank moves its patches
-// into the user presets restored before it); 9: the user presets' FM6 patches (1.0.3)
+// into the user presets restored before it); 9: the user presets' FM6 patches (1.0.3).
+// RDX has no sample/FM6 objects: 10 and 11 are its two User voice banks.
 export const BACKUP_IDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 32, 33, 34];
+export const BACKUP_IDS_RDX = [0, 1, 2, 3, 4, 5, 6, 7, 10, 11];
 const BACKUP_IDS_V2 = BACKUP_IDS.filter((id) => id !== 9);              // 1.0..1.0.2, and their archives
 const BACKUP_IDS_V1 = BACKUP_IDS_V2.filter((id) => id !== 8);           // firmware before FM6, and its archives
-const idsOf = (n) => [BACKUP_IDS, BACKUP_IDS_V2, BACKUP_IDS_V1].find((ids) => ids.length === n) || null;
+const idsOf = (n) => [BACKUP_IDS, BACKUP_IDS_V2, BACKUP_IDS_V1, BACKUP_IDS_RDX].find((ids) => ids.length === n) || null;
 export const BACKUP_CMD = { LIST: 65, GET: 66, PUT: 67 };
 const BACKUP_CHUNK = 256;
 export const bkU32 = (n) => Array.from({ length: 5 }, (_, i) => (n >>> (i * 7)) & (i === 4 ? 15 : 127));

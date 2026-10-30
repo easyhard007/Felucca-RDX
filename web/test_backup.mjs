@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
 // fm1backup.js against a simulated device: 7-bit packing, CRC, manifest checks, a full capture,
 // validation before the first write, restore order (live music last) and abort on a failed chunk.
-import { BACKUP_IDS, BACKUP_CMD, bkU32, bkR32, bkPack, bkUnpack, bkCrc, bkManifest, readBackup, captureBackup, restoreBackup } from "./fm1backup.js";
+import { BACKUP_IDS, BACKUP_IDS_RDX, BACKUP_CMD, bkU32, bkR32, bkPack, bkUnpack, bkCrc, bkManifest, readBackup, captureBackup, restoreBackup } from "./fm1backup.js";
 
 let fails = 0;
 const ok = (c, what) => { console.log(`${what.padEnd(72)} ${c ? "ok" : "FAIL"}`); if (!c) fails++; };
@@ -20,8 +20,8 @@ function device(objs, opt = {}) {
   const d = { objs: new Map(objs), log: [], staged: null };
   d.request = async ([cmd, a]) => {
     if (cmd === BACKUP_CMD.LIST) {
-      const out = [1, 0, BACKUP_IDS.length];
-      for (const id of BACKUP_IDS) { const v = d.objs.get(id) || new Uint8Array(0); out.push(id, ...bkU32(v.length), ...bkU32(v.length ? bkCrc(v) : 0)); }
+      const ids = opt.ids || BACKUP_IDS, out = [1, 0, ids.length];
+      for (const id of ids) { const v = d.objs.get(id) || new Uint8Array(0); out.push(id, ...bkU32(v.length), ...bkU32(v.length ? bkCrc(v) : 0)); }
       return out;
     }
     if (cmd === BACKUP_CMD.GET) {
@@ -52,6 +52,17 @@ const file = await captureBackup(dev.request, "TEST");
 ok(file.objects.length === BACKUP_IDS.length && file.objects[0].size === 3388 && file.objects[3].size === 0, "backup: capture lists every object, empty ones as 0");
 ok(readBackup(JSON.stringify(file)).objects[2].bytes.every((v, i) => v === objs[2][1][i]), "backup: capture -> file -> bytes round trip");
 ok(await athrows(() => captureBackup(device(objs.map(([i, v]) => [i, v.slice()]), { changeOnGet: 2 }).request, "TEST")), "backup: a device that changes during capture fails the capture");
+
+{ /* RDX: ten objects; 10/11 are its two User voice banks. */
+  const rdxObjs = [...objs, [10, rnd(3600, 10)], [11, rnd(3600, 11)]];
+  const rdxFile = await captureBackup(device(rdxObjs, { ids: BACKUP_IDS_RDX }).request, "RDX");
+  const rdxTarget = device([], { ids: BACKUP_IDS_RDX, maxId: 11 });
+  await restoreBackup(rdxTarget.request, rdxFile);
+  ok(rdxFile.objects.length === 10 && rdxFile.objects.map((o) => o.id).every((id, i) => id === BACKUP_IDS_RDX[i]) &&
+    rdxTarget.objs.get(10).every((v, i) => v === rdxObjs.find((o) => o[0] === 10)[1][i]) &&
+    rdxTarget.objs.get(11).every((v, i) => v === rdxObjs.find((o) => o[0] === 11)[1][i]),
+    "backup: RDX ten-object manifest, capture and restore");
+}
 
 const bad = JSON.parse(JSON.stringify(file)); bad.objects[2].crc ^= 1;
 ok(throws(() => readBackup(bad)), "backup: a damaged file is refused");
