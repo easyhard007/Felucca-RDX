@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { logicalImage, productOf } from "./fm1pkg.js";
+import { Package, logicalImage, productOf, validateFm1Package } from "./fm1pkg.js";
 import { Updater, pack7, unpack7 } from "./fm1ota.js";
 
 let failed = 0;
@@ -1697,6 +1697,12 @@ async function packages() {
 sys.stdout.buffer.write(b"".join(raw[i * 48:i * 48 + 47] for i in range(20)) + raw[960:])`, pkg);
   ok(eq(logicalImage(raw), logical), "fm1pkg.js logicalImage");
   ok(/^FM-1_\d{3,8}$/.test(productOf(raw)), "fm1pkg.js productOf");
+  const local = validateFm1Package(raw);
+  ok(local.product === productOf(raw) && eq(local.image, logical), "fm1pkg.js accepts a validated local FM-1 package");
+  const other = new Package(raw); other.setProduct("SMK-37_123");
+  let rejected = false;
+  try { validateFm1Package(other.serialize()); } catch (_) { rejected = true; }
+  ok(rejected, "fm1pkg.js rejects a local package for another device");
 }
 
 /* ------------------------------------------------- update protocol (fm1ota.js) --- */

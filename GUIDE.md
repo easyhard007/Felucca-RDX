@@ -7,8 +7,8 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 1.0.6
-- 固件独立身份：`FM-1_96510006`（编码规则为 `965 + 主版本1位 + 次版本2位 + 修订版本2位`；更新 Loader 仍使用通用的 `ota-FM-1_900`）
+- 当前版本：Felucca RDX 1.0.7
+- 固件独立身份：`FM-1_96510007`（编码规则为 `965 + 主版本1位 + 次版本2位 + 修订版本2位`；更新 Loader 仍使用通用的 `ota-FM-1_900`）
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
 `.toolchains` 和 `build` 均被 Git 忽略。
@@ -88,6 +88,11 @@ pi32v2 固件的 FM-1 模拟器。
 ```
 
 用 Chrome 或 Edge 打开 <http://localhost:8000/webapp/installer/>，点击 `Install`，授权访问 FM-1 的 MIDI 端口并等待写入完成。需要完全清除旧用户区时，勾选 `Fresh install` 后再安装。该模式会清除工程、用户音色、用户采样、自动保存以及全部系统设置，内置 Factory/Selected 音色不受影响。
+
+若需安装旧版或其他可信的 FM-1 固件，展开 `Install a local firmware file`，选择本机
+`.fwsc` 后点击 `Install selected firmware`。文件只在浏览器本地完成结构、CRC 和 FM-1
+机型校验，不会上传；该入口不限制固件版本或数字 identity。所选固件是否支持以后直接
+更新、备份和恢复，由该固件自身决定。
 
 启动安装器时，脚本会在发现新固件包后自动重建网页安装目录，避免 `build\site\firmware` 继续提供旧版本。普通安装使用 `build\felucca.fwsc` 并保留用户区；全新安装使用 `build\felucca-clean.fwsc`。
 

@@ -12,8 +12,8 @@ instrument and its sound sets.
 
 ![Felucca-RDX Algorithm 9 editor](cover.png)
 
-The current firmware version is **Felucca RDX 1.0.6**. Its version-encoded FM-1
-firmware identity is **`FM-1_96510006`** (`965 + M + mm + pp`). RDX is monotimbral: the
+The current firmware version is **Felucca RDX 1.0.7**. Its version-encoded FM-1
+firmware identity is **`FM-1_96510007`** (`965 + M + mm + pp`). RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
@@ -64,6 +64,10 @@ The public GitHub Pages tools are built from `main` by GitHub Actions:
 
 The installer downloads the firmware package produced by the same workflow, so
 the website and firmware always come from the same commit and version. The online
+installer also has an **Install a local firmware file** section. It validates a
+user-selected FM-1 `.fwsc` locally and can install older or third-party FM-1
+packages without uploading the file; only trusted firmware should be used.
+The online
 emulator is rebuilt from the current RDX source on every deployment and therefore
 opens the latest build automatically. It is intended for sound, SysEx, routing and
 UI checks; it does not reproduce the FM-1's AC79 dual-core timing, USB or DMA.

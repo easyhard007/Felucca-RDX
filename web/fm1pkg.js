@@ -238,6 +238,17 @@ export function logicalImage(fwsc) {
   return out;
 }
 
+// Validate a user-selected FM-1 package before offering it to the updater.
+// Package() checks the UFW/JLFS headers, CRCs, chip key and app area.  Unlike
+// validateStockPackage(), this deliberately accepts every numeric FM-1
+// identity so old releases and third-party FM-1 firmware can be installed.
+export function validateFm1Package(bytes) {
+  const pkg = new Package(bytes);
+  if (!/^FM-1_\d+$/.test(pkg.product))
+    throw new Error(`This package is for ${pkg.product || "an unknown device"}, not FM-1.`);
+  return { product: pkg.product, image: logicalImage(bytes) };
+}
+
 export async function sha256hex(bytes) {
   const d = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");

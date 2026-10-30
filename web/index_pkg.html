@@ -41,6 +41,12 @@
   <p class="small"><label><input id="clean-install" type="checkbox"> <span data-t="cleanInstall"></span></label><br>
     <span data-t="cleanWarn"></span></p>
   <details style="margin-top:24px">
+    <summary data-t="localTitle"></summary>
+    <p class="small" data-t="localHelp"></p>
+    <p><label><span data-t="localFile"></span><br><input id="local-file" type="file" accept=".fwsc,application/octet-stream"></label></p>
+    <p><button id="local-go" disabled data-t="localGo"></button></p>
+  </details>
+  <details style="margin-top:24px">
     <summary data-t="stockTitle"></summary>
     <p class="small" data-t="back"></p>
     <p class="small"><a href="https://www.m-vave.com/download" target="_blank" rel="noopener" style="color:inherit">M-VAVE Downloads</a></p>
@@ -72,6 +78,11 @@ const TEXT = {
     cleanInstall: "全新安装（清除所有用户数据）",
     cleanWarn: "这会清除已保存的项目、用户音色、采样、自动保存数据和全部系统设置。",
     cleanConfirm: "全新安装将清除已保存的项目、用户音色、采样、自动保存数据和全部系统设置。是否继续？",
+    localTitle: "安装本地固件文件",
+    localHelp: "选择电脑上的任意 FM-1 .fwsc 固件。浏览器会在本地校验，文件不会上传。请只安装可信固件；其更新和恢复能力由该固件自身决定。",
+    localFile: "FM-1 固件（.fwsc）", localGo: "安装所选固件",
+    localValid: "本地固件已就绪：", localError: "无法读取本地固件：",
+    localConfirm: "确定安装 {file}（{product}）吗？所选固件将决定以后能否直接更新或恢复。",
     editor: "编辑器（安装后可在电脑上管理音色和编辑参数）",
     emulator: "在线模拟器（无需安装即可试玩最新版）",
     manual: "Felucca-RDX 中文说明书",
@@ -109,6 +120,11 @@ const TEXT = {
     cleanInstall: "Fresh install (erase all user data)",
     cleanWarn: "Erases saved projects, user voices, samples, autosave data and all system settings.",
     cleanConfirm: "Fresh install will erase saved projects, user voices, samples, autosave data and all system settings. Continue?",
+    localTitle: "Install a local firmware file",
+    localHelp: "Choose any FM-1 .fwsc firmware on this computer. It is validated locally and never uploaded. Only install firmware you trust; update and return support depends on that firmware.",
+    localFile: "FM-1 firmware (.fwsc)", localGo: "Install selected firmware",
+    localValid: "Local firmware ready: ", localError: "Cannot read local firmware: ",
+    localConfirm: "Install {file} ({product})? The selected firmware controls whether direct update or return will work later.",
     editor: "Editor (after installing: edit sounds and sequences from the computer)",
     emulator: "Online emulator (play the latest build without installing)",
     manual: "Felucca-RDX user manual",
@@ -157,8 +173,17 @@ const log = (t) => { $("log").textContent += t + "\n"; };
 let image = null, cleanImage = null;
 const meta = /*META*/;
 
-let writing = false, stock = null, stockFileEpoch = 0;
-const lockInstaller = (on) => { writing = on; $("go").disabled = on || !image || !cleanImage; $("clean-install").disabled = on; $("stock-go").disabled = on || !stock; $("stock-file").disabled = on; $("stock-recovery").disabled = on; };
+let writing = false, stock = null, stockFileEpoch = 0, localFirmware = null, localFileEpoch = 0;
+const lockInstaller = (on) => {
+  writing = on;
+  $("go").disabled = on || !image || !cleanImage;
+  $("clean-install").disabled = on;
+  $("local-go").disabled = on || !localFirmware;
+  $("local-file").disabled = on;
+  $("stock-go").disabled = on || !stock;
+  $("stock-file").disabled = on;
+  $("stock-recovery").disabled = on;
+};
 window.addEventListener("beforeunload", (e) => { if (writing) { e.preventDefault(); e.returnValue = t("leave"); } });
 
 function deadline(promise, ms, code, message) {
@@ -189,11 +214,7 @@ function midiError(e) { sayK(e && e.code === "miditimeout" ? "miditimeout" : "de
   } catch (e) { sayK("loadfail", e.message); }
 })();
 
-$("go").addEventListener("click", async () => {
-  if (writing) return;
-  const fresh = $("clean-install").checked;
-  if (fresh && !confirm(t("cleanConfirm"))) return;
-  const installImage = fresh ? cleanImage : image;
+async function installFirmware(installImage, product) {
   lockInstaller(true);
   let midi;
   try { midi = await requestMidi(); }
@@ -213,9 +234,9 @@ $("go").addEventListener("click", async () => {
     const ota = await up.find((id) => /^ota-/i.test(id.model), false);
     if (ota) {
       ota.link.close();
-      sayK((await up.resume(installImage, step, meta.product)) ? "done" : "stopped");
+      sayK((await up.resume(installImage, step, product)) ? "done" : "stopped");
     } else {
-      await up.install(installImage, meta.product, step);
+      await up.install(installImage, product, step);
     }
   } catch (e) {
     if (e && e.code && TEXT[lang][e.code]) sayK(e.code, e.detail || "");
@@ -223,6 +244,33 @@ $("go").addEventListener("click", async () => {
     log(String(e && e.stack || e));
   }
   lockInstaller(false);
+}
+
+$("go").addEventListener("click", async () => {
+  if (writing) return;
+  const fresh = $("clean-install").checked;
+  if (fresh && !confirm(t("cleanConfirm"))) return;
+  await installFirmware(fresh ? cleanImage : image, meta.product);
+});
+
+$("local-file").addEventListener("change", async () => {
+  const epoch = ++localFileEpoch, file = $("local-file").files[0];
+  localFirmware = null; lockInstaller(false);
+  if (!file) return;
+  try {
+    const verified = validateFm1Package(new Uint8Array(await file.arrayBuffer()));
+    if (epoch !== localFileEpoch) return;
+    localFirmware = {...verified, name: file.name};
+    sayK("localValid", `${file.name} (${verified.product})`); lockInstaller(false);
+  } catch (e) { if (epoch === localFileEpoch) sayK("localError", e.message); }
+});
+
+$("local-go").addEventListener("click", async () => {
+  if (!localFirmware || writing) return;
+  const selected = localFirmware;
+  const question = t("localConfirm").replace("{file}", selected.name).replace("{product}", selected.product);
+  if (!confirm(question)) return;
+  await installFirmware(selected.image, selected.product);
 });
 
 $("stock-file").addEventListener("change", async () => {
