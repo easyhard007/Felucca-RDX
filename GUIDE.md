@@ -7,7 +7,7 @@
 - 本地服务入口：`serve-rdx.ps1`
 - JieLi 工具链：`.toolchains\jieli`
 - AC79 SDK：`.toolchains\fw-AC79_AIoT_SDK`
-- 当前版本：Felucca RDX 1.0.4
+- 当前版本：Felucca RDX 1.0.5
 - 固件独立身份：`FM-1_947`（与上游 Felucca 的 `FM-1_900` 区分，同时保留 9xx Loader 恢复兼容性）
 - 默认配置：单音色、单轨、RDX 8 复音、双核、128-frame 音频缓冲
 
@@ -117,12 +117,12 @@ RDX 固件只有一个运行时轨道。ALGORITHM 旋钮不再切换轨道，MID
 在所有页面顶部正中；八度为 0 时中央保持空白。主移调和八度会同时作用于面板
 键盘、MIDI 输入、琶音器和音序器；最终音符会限制在 MIDI 0 到 127 范围内。
 
-RDX 使用串行立体声 `FX1 -> FX2` 链。Phaser 和 Flanger 可在 `AUDIO` 菜单中切换算法：
+RDX 使用串行立体声 `FX1 -> FX2` 链。1.0.5 起不再提供实验性 A/B 入口：
 
-- `PHS MODEL`：`RDX` 为定点 PicoFaceDX 算法，`FELUCCA` 为保留的原算法；
-- `FLG MODEL`：`RDX` 为定点 PicoFaceDX 算法，`FELUCCA` 为保留的原算法。
+- Phaser 固定使用 RDX 定点立体声算法；
+- Flanger 固定使用 RDX THK-W 算法。
 
-两项默认均为 `RDX`，选择会保存到系统设置。
+RDX 音频引擎也固定使用 Optimized 渲染器；旧设置记录中的 A/B 选择会被忽略。
 
 按 `FX` 会在 4 页间循环：
 

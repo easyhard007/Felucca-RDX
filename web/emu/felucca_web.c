@@ -620,8 +620,16 @@ EXPORT void web_test_rdx_dry(void)
 #endif
     t->p[P_DIST] = t->p[P_CHOR] = t->p[P_DLY] = t->p[P_REV] = 0;
 }
-EXPORT void web_test_rdx_type_set(uint32_t type) { menu_put(MI_RDXTYPE, type != 0u); }
-EXPORT uint32_t web_test_rdx_type(void) { return menu_get(MI_RDXTYPE); }
+EXPORT void web_test_rdx_type_set(uint32_t type) { rdx_type_set(type); }
+EXPORT uint32_t web_test_rdx_type(void) { return rdx_type_get(); }
+EXPORT uint32_t web_test_rdx_retired_menu_entries(void)
+{
+    uint32_t i, n = 0u;
+    for (i = 0; i < MI_COUNT; i++)
+        n += str_eq(MI_NAME[i], "RDX TYPE") || str_eq(MI_NAME[i], "PHS MODEL") ||
+             str_eq(MI_NAME[i], "FLG MODEL");
+    return n;
+}
 EXPORT uint32_t web_test_rdx_preset_category(uint32_t preset)
 {
     return preset_cat(ENGI_RDX, preset % RDX_NPATCHES);
@@ -678,10 +686,10 @@ EXPORT uint32_t web_test_rdx_fx_double_tap_disabled(void)
 }
 EXPORT void web_test_velocity_curve_set(uint32_t curve) { menu_put(MI_VELCURVE, curve); }
 EXPORT uint32_t web_test_velocity_curve(void) { return menu_get(MI_VELCURVE); }
-EXPORT void web_test_rdx_phaser_model_set(uint32_t model) { menu_put(MI_PHSMODEL, model != 0u); }
-EXPORT uint32_t web_test_rdx_phaser_model(void) { return menu_get(MI_PHSMODEL); }
-EXPORT void web_test_rdx_flanger_model_set(uint32_t model) { menu_put(MI_FLGMODEL, model != 0u); }
-EXPORT uint32_t web_test_rdx_flanger_model(void) { return menu_get(MI_FLGMODEL); }
+EXPORT void web_test_rdx_phaser_model_set(uint32_t model) { rdx_phaser_model_set(model); }
+EXPORT uint32_t web_test_rdx_phaser_model(void) { return rdx_phaser_model_get(); }
+EXPORT void web_test_rdx_flanger_model_set(uint32_t model) { rdx_flanger_model_set(model); }
+EXPORT uint32_t web_test_rdx_flanger_model(void) { return rdx_flanger_model_get(); }
 EXPORT uint32_t web_test_rdx_flanger_wet_q15(uint32_t depth) { return rfx_flanger_wet_q15(depth); }
 EXPORT uint32_t web_test_rdx_flanger_feedback_q15(uint32_t depth) { return rfx_flanger_feedback_q15(depth); }
 EXPORT uint32_t web_test_rdx_flanger_speed_inc(uint32_t speed) { return rfx_flanger_speed_inc(speed); }

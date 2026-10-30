@@ -39,12 +39,11 @@ static const uint8_t ED_MENU[][2] = {
 #endif
     {MI_SCRWAKE, 31},                                  /* 1.5.5: SCREEN WAKE +MIDI / PANEL, a setting, MIDI */
 #if FELUCCA_CPU2
-    {MI_CPU2, 32},                                     /* 1.6.1, the second core (Discussion #141): 2ND CORE OFF / ON (BETA),
+    {MI_CPU2, 32},                                     /* 1.6.1, the second core (Discussion #141): 2ND CORE OFF / ON,
                                                         * SYSTEM, from the next power-on (a FELUCCA_CPU2=0 build: 0..31) */
 #endif
 #if FELUCCA_RDX
     {MI_VELCURVE, 33},                                 /* RDX: incoming MIDI velocity curve, SOFT 2 .. HARD 2 */
-    {MI_PHSMODEL, 34}, {MI_FLGMODEL, 35},              /* RDX: Felucca / PicoFace fixed-point effect A/B */
 #endif
 };
 #define ED_MENU_N NELEM(ED_MENU)

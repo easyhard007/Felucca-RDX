@@ -89,23 +89,21 @@ for (let shown = 0; shown < 53; shown++) {
   editorSlotNames.add(name);
 }
 check("Editor device presets map 53 unique visible slots bidirectionally", editorSlotsOk);
-check("RDX TYPE defaults to the optimized renderer", d.ex.web_test_rdx_type() === 1);
+check("RDX renderer is fixed to OPTIMIZED", d.ex.web_test_rdx_type() === 1);
 d.ex.web_test_rdx_type_set(0);
-check("System RDX TYPE can switch back to the original renderer", d.ex.web_test_rdx_type() === 0);
-d.ex.web_test_rdx_type_set(1);
-check("System RDX TYPE can switch to the optimized renderer", d.ex.web_test_rdx_type() === 1);
+check("legacy callers cannot switch the renderer back to ORIGIN", d.ex.web_test_rdx_type() === 1);
+check("retired RDX TYPE, PHS MODEL and FLG MODEL entries are absent from MENU",
+      d.ex.web_test_rdx_retired_menu_entries() === 0);
 check("RDX HOME no longer exposes the obsolete CLOCK page",
       d.ex.web_test_rdx_home_has_no_clock() === 1);
 check("RDX FX double tap no longer locks the MACROS/EFFECTS layer",
       d.ex.web_test_rdx_fx_double_tap_disabled() === 1);
-check("PHS and FLG MODEL default to the fixed-point PicoFace RDX algorithms",
+check("Phaser and Flanger are fixed to the RDX algorithms",
       d.ex.web_test_rdx_phaser_model() === 1 && d.ex.web_test_rdx_flanger_model() === 1);
 d.ex.web_test_rdx_phaser_model_set(0);
 d.ex.web_test_rdx_flanger_model_set(0);
-check("PHS and FLG MODEL retain the original Felucca algorithms for A/B tests",
-      d.ex.web_test_rdx_phaser_model() === 0 && d.ex.web_test_rdx_flanger_model() === 0);
-d.ex.web_test_rdx_phaser_model_set(1);
-d.ex.web_test_rdx_flanger_model_set(1);
+check("legacy callers cannot switch Phaser or Flanger to Felucca models",
+      d.ex.web_test_rdx_phaser_model() === 1 && d.ex.web_test_rdx_flanger_model() === 1);
 check("RDX Flanger uses the retained THK-W linear 30..100 percent wet macro",
       d.ex.web_test_rdx_flanger_wet_q15(0) === 0 &&
       d.ex.web_test_rdx_flanger_wet_q15(1) === 9830 &&
@@ -468,16 +466,12 @@ check("RDX Flanger fixes the outer serial SEND at 100 percent",
       fxab.ex.web_test_rdx_fx_send_desc(0, 1) === 127 &&
       fxab.ex.web_test_rdx_fx_send_desc(0, 2) === 127 &&
       fxab.ex.web_test_rdx_fx_send_desc(0, 3) === 127);
-fxab.ex.web_test_rdx_flanger_model_set(0);
-fxab.ex.web_midi(0x90, 60, 100);
-const oldFlanger = fxab.renderFrames(128 * 16, true);
-fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
-fxab.ex.web_test_rdx_flanger_model_set(1);
+fxab.ex.web_test_rdx_flanger_model_set(0);              // retired API must be ignored
 fxab.ex.web_midi(0x90, 60, 100);
 const rdxFlanger = fxab.renderFrames(128 * 16, true);
 fxab.ex.web_midi(0x80, 60, 0); fxab.render(1500);
-check("RDX Flanger creates stereo width while the retained Felucca model remains mono",
-      sideEnergy(oldFlanger) < 0.001 && sideEnergy(rdxFlanger) > 0.01);
+check("the fixed RDX Flanger creates stereo width",
+      fxab.ex.web_test_rdx_flanger_model() === 1 && sideEnergy(rdxFlanger) > 0.01);
 check("Flanger detail returns to DEPTH and RATE only",
       readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 0) === "DEPTH" &&
       readIndexedString(fxab.ex, "web_test_rdx_fx_param_label_byte", 0, 1) === "RATE" &&

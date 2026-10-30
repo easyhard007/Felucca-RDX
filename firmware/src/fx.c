@@ -1082,7 +1082,6 @@ static uint32_t rdx_perf_sig(const track_t *t)
     uint32_t i, h = (uint32_t)t->preset + 2166136261u + (uint32_t)(t - trk) * 131u;
     for (i = 0; i < 8u; i++)
         h = (h ^ (uint16_t)t->p[P_E0 + i]) * 16777619u;
-    h = (h ^ rdx_type_get()) * 16777619u;       /* switching RDX TYPE clears AVG and PEAK */
     return h;
 }
 

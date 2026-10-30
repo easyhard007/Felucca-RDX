@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * RDX block renderer used by MENU > SYSTEM > RDX TYPE > OPTIMIZED.
+ * RDX block renderer. Since 1.0.5 this is the firmware's only active renderer.
  *
  * The envelope control pass emits four 32-sample gain blocks a linear segment
  * at a time.  The twelve algorithm kernels then keep their operator buses in

@@ -71,17 +71,19 @@ int main(void){
  trk_note_on(&trk[0],60,100);blocks(100);trk[0].p[P_REL]=0;trk_note_off(&trk[0],60);blocks(1);
  assert(trk[0].v[0].active);assert(!rdx_note(&trk[0],&trk[0].v[0])->down);
  puts("RDX: native release remains active with generic REL=0 ok");
- reset();rdx_type_set(0);rdx_perf.sig=rdx_perf_sig(&trk[0]);rdx_perf.avg_q8=123u<<8;rdx_perf.peak_us=456;rdx_perf.valid=1;
- rdx_type_set(1);rdx_perf_half_begin();assert(!rdx_perf.avg_q8&&!rdx_perf.peak_us&&!rdx_perf.valid);
- puts("RDX: changing renderer clears AVG and PEAK on the next audio half");
+ reset();rdx_type_set(0);assert(rdx_type_get()==1u);
+ assert(rdx_phaser_model_get()==1u && rdx_flanger_model_get()==1u);
+ rdx_phaser_model_set(0);rdx_flanger_model_set(0);
+ assert(rdx_phaser_model_get()==1u && rdx_flanger_model_get()==1u);
+ puts("RDX: renderer, phaser and flanger remain fixed to RDX optimized models");
  for(unsigned p=0;p<RDX_NPRESETS;p++)assert(isolated(p,1,0,0,0)==isolated(p,1,0,0,1));
- puts("RDX: all factory presets ORIGIN/OPTIMIZED audio identical");
+ puts("RDX: legacy renderer selection calls cannot alter factory preset audio");
  for(unsigned n=1;n<=8;n++){
   uint64_t h=isolated(0,n,0,0,0);assert(h==isolated(0,n,1,0,0));
   assert(h==isolated(0,n,1,1,0));assert(h==isolated(0,n,1,17,0));
   assert(h==isolated(0,n,0,0,1));assert(h==isolated(0,n,1,0,1));
   assert(h==isolated(0,n,1,1,1));assert(h==isolated(0,n,1,17,1));
-  printf("RDX: %u voices ORIGIN/OPTIMIZED and serial/parallel/recovery identical\n",n);
+  printf("RDX: %u voices fixed optimized renderer and serial/parallel/recovery identical\n",n);
  }
  return 0;
 }

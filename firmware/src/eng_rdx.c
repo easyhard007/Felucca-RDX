@@ -108,22 +108,15 @@ static volatile uint8_t rdx_touch_wah_pos[NTRK] = {64};
 static const rdx_patch_t *rdx_track_get(uint32_t tr);
 static uint32_t rdx_fx_type_of(const track_t *t, uint32_t slot);
 static uint32_t rdx_fx_send_of(const track_t *t, uint32_t slot);
-/* MENU > SYSTEM > RDX TYPE.  Kept outside the settings byte because the
- * engine is compiled before ui.c in Felucca's single translation unit. */
-static uint8_t rdx_type = 1u;                 /* OPTIMIZED is the default for a fresh or upgraded unit */
-static uint32_t rdx_type_get(void) { return rdx_type != 0u; }
-static void rdx_type_set(uint32_t type) { rdx_type = (uint8_t)!!type; }
-
-/* MENU > AUDIO > PHS/FLG MODEL.  The original fixed-point Felucca inserts
- * remain available for controlled A/B tests; RDX selects the fixed-point
- * ports of PicoFaceDX's stereo algorithms.  RDX is the default; the saved
- * preference bits are inverted so older all-zero settings receive it while
- * an explicit Felucca A/B choice can still persist. */
-static uint8_t rdx_phaser_model = 1u, rdx_flanger_model = 1u;
-static uint32_t rdx_phaser_model_get(void) { return rdx_phaser_model != 0u; }
-static uint32_t rdx_flanger_model_get(void) { return rdx_flanger_model != 0u; }
-static void rdx_phaser_model_set(uint32_t model) { rdx_phaser_model = (uint8_t)!!model; }
-static void rdx_flanger_model_set(uint32_t model) { rdx_flanger_model = (uint8_t)!!model; }
+/* 1.0.5 retired the A/B settings.  Keep these tiny compatibility hooks for
+ * older host tests/editors, but no caller can select a legacy renderer or FX
+ * model any more. */
+static uint32_t rdx_type_get(void) { return 1u; }
+static void rdx_type_set(uint32_t type) { (void)type; }
+static uint32_t rdx_phaser_model_get(void) { return 1u; }
+static uint32_t rdx_flanger_model_get(void) { return 1u; }
+static void rdx_phaser_model_set(uint32_t model) { (void)model; }
+static void rdx_flanger_model_set(uint32_t model) { (void)model; }
 
 static uint32_t rdx_touch_wah_active(const track_t *t)
 {
@@ -1291,10 +1284,7 @@ static __attribute__((noinline)) void rdx_render_origin(track_t *t, voice_t *v, 
 
 static void rdx_render(track_t *t, voice_t *v, int32_t *out, uint32_t len, const vmod_t *m)
 {
-    if (rdx_type_get())
-        rdx_render_optimized(t, v, out, len, m);
-    else
-        rdx_render_origin(t, v, out, len, m);
+    rdx_render_optimized(t, v, out, len, m);
 }
 
 static const char *const N_RDX_ALG[] = {

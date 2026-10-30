@@ -81,7 +81,7 @@ static uint32_t up_gen;                      /* bumped on every user bank change
 #define PREF_SEL_PAGE (0x10u << 16)
 #define PREF_WAKE_PANEL (0x20u << 16)
 #define PREF_SEL_HI (0x40u << 16)
-#define PREF_CPU2_ON (0x80u << 16)              /* MENU > SYSTEM > 2ND CORE ON (BETA): the second core from the next
+#define PREF_CPU2_ON (0x80u << 16)              /* MENU > SYSTEM > 2ND CORE ON: the second core from the next
                                                  * power-on (main.c); clear = OFF, one core as 1.6 (every older setting:
                                                  * 1.6 never set bit 7). It turns itself OFF when core 1 misreads
                                                  * (hal/fm1_cpu1.h). (The 1.6.1 dual-core beta build had it the other
@@ -254,10 +254,9 @@ enum { CF_NONE, CF_CLEAR_SEQ, CF_CLEAR_TRK, CF_OVR_PROJ, CF_OVR_USER, CF_LOAD_PA
  * (ui.force), then DISPON (lcd_power(2)) */
 #define ui_scr (favorites.factory[15][27])
 /* MENU > ANIM IDLE (1.2, Discussion #135; menu_items.c, ui_input.c idle_leds): bit 0, the LEDs' idle animation, in a
- * byte no engine uses, kept with the settings; 0 in every older setting = off. RDX builds use bit 1 for MENU >
- * SYSTEM > RDX TYPE (0 ORIGIN, 1 OPTIMIZED), bit 2 to mark that choice as explicitly stored, bits 3..5 for the
- * MIDI velocity curve, and inverted bits 6/7 for AUDIO > PHS/FLG MODEL (0 RDX, 1 FELUCCA). Stored curve 0 is
- * HARD 1, so every older record receives both the velocity and PicoFace-effect RDX defaults. */
+ * byte no engine uses, kept with the settings; 0 in every older setting = off. RDX builds use bits 3..5 for the
+ * MIDI velocity curve. Retired 1.0.4 A/B choices occupied bits 1, 2, 6 and 7; they remain reserved so existing
+ * settings records keep their binary layout. Stored curve 0 is HARD 1. */
 #define ui_idle (favorites.factory[15][10])
 #if FELUCCA_RDX
 #define RDX_TYPE_OPT 2u
