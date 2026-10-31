@@ -76,8 +76,9 @@ const sustain = await boot();
 }
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
 check("RDX firmware has one runtime track", d.ex.web_test_track_count() === 1);
-check("diagnostic build shows AUDIO LATE over every page and retains four records",
-      uiDrawSource.includes("draw_audio_late_notice") &&
+check("release UI hides the AUDIO LATE overlay while retaining four INFO records",
+      uiDrawSource.includes("static void draw_audio_late_notice") &&
+      uiDrawSource.includes("// draw_audio_late_notice();") &&
       voiceSource.includes("AUDIO_LATE_HISTORY 4u"));
 check("RDX editor exposes only canonical engine slot 12",
       d.ex.web_test_visible_engine_count() === 1 && d.ex.web_test_first_visible_engine() === 12);

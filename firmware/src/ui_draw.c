@@ -1878,7 +1878,7 @@ static void ui_draw(void)
         return;
     ui_draw_page(counting);
 #if FELUCCA_RDX
-    draw_audio_late_notice();                           /* last: visible over HOME, menus and dialogs */
+    // draw_audio_late_notice();                        /* release UI: diagnostics remain available in INFO */
 #endif
     scr_shown();
 }
