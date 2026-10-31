@@ -417,9 +417,19 @@ def main():
         m = re.fullmatch(r"(\d)\.(\d)(?:\.\d){0,2}(-[A-Za-z0-9]+)?", a.release)
         if not m:
             raise SystemExit(f"--release {a.release}: use X.Y, X.Y.Z, X.Y.Z.W or X.Y-suffix, one digit each")
-        if os.environ.get("FELUCCA_RDX") != "1" and "FELUCCA_PRODUCT" not in os.environ:
+        if os.environ.get("FELUCCA_RDX") == "1":
+            header = (FW / "src" / "rdx_version.h").read_text(encoding="utf-8")
+            source_version = re.search(r'^#define\s+RDX_VERSION\s+"([^"]+)"\s*$', header, re.M)
+            if not source_version or source_version.group(1) != a.release:
+                raise SystemExit(f"--release {a.release}: rdx_version.h has "
+                                 f"{source_version.group(1) if source_version else 'no RDX_VERSION'}")
+            # The RDX splash uses RDX_VERSION directly.  Do not define
+            # FELUCCA_VERSION here: doing so would skip rdx_version.h in
+            # felucca.c and leave the splash's RDX_VERSION undefined.
+        elif "FELUCCA_PRODUCT" not in os.environ:
             PRODUCT = "FM-1_9" + m[1] + m[2]
-        VERSION = "v" + a.release.lower()      # e.g. v1.0, v1.1-rc1
+        if os.environ.get("FELUCCA_RDX") != "1":
+            VERSION = "v" + a.release.lower()      # e.g. v1.0, v1.1-rc1
         name = f"felucca-{a.release}.fwsc"
         clean_name = f"felucca-{a.release}-clean.fwsc"
     if not (FW / "engines" / "src" / "felucca_engine.h").exists():

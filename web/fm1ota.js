@@ -97,6 +97,31 @@ function response(addr, data, fl = 0) {
   return [0xF0, ...pack7(body), 0xF7];
 }
 
+function checksum(data) {
+  let sum = 0;
+  for (const b of data) sum = (sum + b) & 0xFF;
+  return (~sum) & 0xFF;
+}
+
+function command(cmd, payload = []) {
+  const n = payload.length;
+  const body = [0x00, 0x59, cmd, n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF,
+    ...payload, checksum(payload)];
+  return [0xF0, ...pack7(body), 0xF7];
+}
+
+function parseCommand(pkt) {
+  if (pkt[0] !== 0xF0 || pkt[pkt.length - 1] !== 0xF7) return null;
+  const body = unpack7(pkt.slice(1, -1));
+  if (body.length < 7 || body[0] !== 0 || body[1] !== 0x59) return null;
+  const n = body[3] | (body[4] << 8) | (body[5] << 16);
+  if (body.length !== n + 7) return null;
+  const payload = body.slice(6, 6 + n);
+  return checksum(payload) === body[6 + n] ? { cmd: body[2], payload } : null;
+}
+
+const le = (value, n) => Array.from({length:n}, (_, i) => (value >>> (i * 8)) & 0xFF);
+
 function parseRequest(pkt) {
   if (pkt[0] !== 0xF0 || pkt[pkt.length - 1] !== 0xF7) return null;
   const u = unpack7(pkt.slice(1, -1));
@@ -293,6 +318,52 @@ export class Updater {
       back.link.close();
       if (back.id.text !== product) throw fail("mismatch", "The FM-1 reports a different firmware after resuming.", back.id.text);
       step("done", back.id.text);
+    }
+    return true;
+  }
+
+  // V15's OTA only installs flash.bin; its stock 128 voices are a separate
+  // encrypted package part.  Once V15 is running, rewrite the four 4 KiB banks
+  // using the same erase/write commands as M-VAVE's updater (4 erases and 32
+  // acknowledged 512-byte writes).  Retrying is safe and completes a partial
+  // restore from the beginning.
+  async restoreFactoryVoices(voices, onProgress) {
+    if (!(voices instanceof Uint8Array) || voices.length !== 0x4000)
+      throw fail("voices", "V15 factory voice data is missing or damaged");
+    const dev = await this.find((id) => id.text === "FM-1_015");
+    if (!dev) throw fail("voices", "V15 did not reconnect for factory-voice restore");
+    const progress = onProgress || (() => {});
+    let written = 0;
+    try {
+      const ack = async (cmd, payload) => {
+        dev.link.drain();
+        if (!dev.link.send(command(cmd, payload))) throw fail("voices", "FM-1 disconnected during factory-voice restore");
+        const end = Date.now() + 3000;
+        while (Date.now() < end) {
+          const pkt = await dev.link.read(end - Date.now());
+          if (!pkt) break;
+          const reply = parseCommand(pkt);
+          if (!reply || reply.cmd !== 0x00) continue;
+          if (reply.payload.length !== 1 || reply.payload[0] !== 0)
+            throw fail("voices", `V15 refused factory-voice restore at ${written} bytes`);
+          return;
+        }
+        throw fail("voices", `Factory-voice restore timed out at ${written} bytes`);
+      };
+      progress(0, voices.length);
+      for (let bank = 0; bank < voices.length; bank += 0x1000) {
+        await ack(0x21, [5, ...le(bank, 4)]);
+        for (let off = bank; off < bank + 0x1000; off += 512) {
+          await ack(0x22, [5, ...le(off, 4), ...le(512, 3), ...voices.subarray(off, off + 512)]);
+          written = off + 512;
+          progress(written, voices.length);
+        }
+      }
+      const id = await handshake(dev.link);
+      if (!id || id.text !== "FM-1_015")
+        throw fail("voices", "The device stopped reporting V15 after the factory-voice restore");
+    } finally {
+      dev.link.close();
     }
     return true;
   }

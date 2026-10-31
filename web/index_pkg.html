@@ -94,6 +94,9 @@ const TEXT = {
     stockBackup: "恢复前会先保存当前音乐、已保存音乐、音色库、采样和设置。旧版固件需先更新 Felucca-RDX 才能进行完整备份。以后如需恢复，请重新安装 Felucca-RDX 并在编辑器中导入备份。",
     stockRecovery: "继续上次中断的更新：完整备份已保存到本电脑",
     stockValid: "已确认官方固件：", stockConfirm: "完整备份文件是否已保存到本电脑？继续后将恢复官方固件；官方固件无法读取 Felucca-RDX 数据。",
+    stockNoBackupConfirm: "当前设备不是 Felucca-RDX，无法使用 RDX 完整备份协议。继续安装所选官方固件吗？",
+    stockV16Note: "V16 包不携带原厂音色。如果音色已丢失，请先用本页面安装一次 V15 以恢复 128 个原厂音色，再升级到 V16。",
+    voices: "正在恢复 V15 原厂音色 ", voicesDone: "V15 与 128 个原厂音色已恢复",
     stockNeedBackup: "设备处于写入模式时无法导出备份。仅当完整备份已经保存时，才可勾选继续中断的更新。",
     stockUnsupported: "当前 Felucca-RDX 版本不支持完整备份，请先安装最新版 Felucca-RDX。",
     backup: "正在保存完整备份 ", stockError: "无法验证官方固件：",
@@ -136,6 +139,9 @@ const TEXT = {
     stockBackup: "Current music, saved music, sound banks, samples and settings are saved first. Older firmware needs a Felucca-RDX update for complete backups. To restore an archive later, reinstall Felucca-RDX and use the editor.",
     stockRecovery: "Resume an interrupted update: I already saved a complete backup to this computer",
     stockValid: "Official firmware verified: ", stockConfirm: "Has the complete backup file been saved to this computer? Continue to return to official firmware. Official firmware cannot open Felucca-RDX data.",
+    stockNoBackupConfirm: "The current device is not running Felucca-RDX, so the RDX complete-backup protocol is unavailable. Continue with the selected official firmware?",
+    stockV16Note: "V16 does not carry the factory voices. If they are missing, install V15 here once to restore all 128 voices, then update to V16.",
+    voices: "Restoring V15 factory voices ", voicesDone: "V15 and all 128 factory voices restored",
     stockNeedBackup: "An update loader cannot export a backup. Only select resume if you already saved a complete backup.",
     stockUnsupported: "This Felucca-RDX build does not support complete backups. Install the current Felucca-RDX first.",
     backup: "Saving complete backup ", stockError: "Cannot validate official firmware: ",
@@ -214,7 +220,16 @@ function midiError(e) { sayK(e && e.code === "miditimeout" ? "miditimeout" : "de
   } catch (e) { sayK("loadfail", e.message); }
 })();
 
-async function installFirmware(installImage, product) {
+async function restoreOfficialVoices(up, factoryVoices) {
+  if (!factoryVoices) return;
+  await up.restoreFactoryVoices(factoryVoices, (done, total) => {
+    const pct = Math.round(done / Math.max(1, total) * 100);
+    sayK("voices", `${pct}%`); $("bar").value = pct;
+  });
+  $("bar").value = 100; sayK("voicesDone");
+}
+
+async function installFirmware(installImage, product, factoryVoices = null) {
   lockInstaller(true);
   let midi;
   try { midi = await requestMidi(); }
@@ -234,9 +249,12 @@ async function installFirmware(installImage, product) {
     const ota = await up.find((id) => /^ota-/i.test(id.model), false);
     if (ota) {
       ota.link.close();
-      sayK((await up.resume(installImage, step, product)) ? "done" : "stopped");
+      const ok = await up.resume(installImage, step, product);
+      if (!ok) sayK("stopped");
+      else await restoreOfficialVoices(up, factoryVoices);
     } else {
       await up.install(installImage, product, step);
+      await restoreOfficialVoices(up, factoryVoices);
     }
   } catch (e) {
     if (e && e.code && TEXT[lang][e.code]) sayK(e.code, e.detail || "");
@@ -258,10 +276,14 @@ $("local-file").addEventListener("change", async () => {
   localFirmware = null; lockInstaller(false);
   if (!file) return;
   try {
-    const verified = validateFm1Package(new Uint8Array(await file.arrayBuffer()));
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let verified;
+    try { verified = await validateStockPackage(bytes); }
+    catch (_) { verified = validateFm1Package(bytes); }
     if (epoch !== localFileEpoch) return;
     localFirmware = {...verified, name: file.name};
-    sayK("localValid", `${file.name} (${verified.product})`); lockInstaller(false);
+    sayK("localValid", `${file.name} (${verified.product})${verified.version === "V16" ? `. ${t("stockV16Note")}` : ""}`);
+    lockInstaller(false);
   } catch (e) { if (epoch === localFileEpoch) sayK("localError", e.message); }
 });
 
@@ -270,7 +292,7 @@ $("local-go").addEventListener("click", async () => {
   const selected = localFirmware;
   const question = t("localConfirm").replace("{file}", selected.name).replace("{product}", selected.product);
   if (!confirm(question)) return;
-  await installFirmware(selected.image, selected.product);
+  await installFirmware(selected.image, selected.product, selected.factoryVoices || null);
 });
 
 $("stock-file").addEventListener("change", async () => {
@@ -279,7 +301,9 @@ $("stock-file").addEventListener("change", async () => {
   try {
     const verified = await validateStockPackage(new Uint8Array(await file.arrayBuffer()));
     if (epoch !== stockFileEpoch) return;
-    stock = verified; sayK("stockValid", verified.version); lockInstaller(false);
+    stock = verified;
+    sayK("stockValid", `${verified.version}${verified.version === "V16" ? `. ${t("stockV16Note")}` : ""}`);
+    lockInstaller(false);
   } catch (e) { if (epoch === stockFileEpoch) sayK("stockError", e.message); }
 });
 function saveArchive(archive) {
@@ -311,10 +335,19 @@ $("stock-go").addEventListener("click", async () => {
       loader.link.close();
       if (!$("stock-recovery").checked) { sayK("stockNeedBackup"); return; }
       if (!confirm(t("stockConfirm"))) return;
-      sayK(await up.resume(selected.image, step, selected.product) ? "done" : "stopped");
+      const ok = await up.resume(selected.image, step, selected.product);
+      if (!ok) sayK("stopped");
+      else await restoreOfficialVoices(up, selected.factoryVoices);
     } else {
       const device = await up.find(id => id.model === "FM-1");
       if (!device) { sayK("notfound"); return; }
+      if (!/^FM-1_965\d+$/.test(device.id.text)) {
+        device.link.close();
+        if (!confirm(t("stockNoBackupConfirm"))) return;
+        await up.install(selected.image, selected.product, step);
+        await restoreOfficialVoices(up, selected.factoryVoices);
+        return;
+      }
       const input = device.link.input, output = device.link.output; device.link.close();
       link = new BackupConnection(input, output);
       const info = archiveInfo(await link.request([1,[]]));
@@ -324,6 +357,7 @@ $("stock-go").addEventListener("click", async () => {
       saveArchive(archive); link.close(); link = null;
       if (!confirm(t("stockConfirm"))) return;
       await up.install(selected.image, selected.product, step);
+      await restoreOfficialVoices(up, selected.factoryVoices);
     }
   } catch (e) {
     if (e.code && TEXT[lang][e.code]) sayK(e.code,e.detail || ""); else sayK("error",e.message);

@@ -12,8 +12,8 @@ instrument and its sound sets.
 
 ![Felucca-RDX Algorithm 9 editor](cover.png)
 
-The current firmware version is **Felucca RDX 1.1.1**. Its version-encoded FM-1
-firmware identity is **`FM-1_96510101`** (`965 + M + mm + pp`). RDX is monotimbral: the
+The current firmware version is **Felucca RDX 1.1.2**. Its version-encoded FM-1
+firmware identity is **`FM-1_96510102`** (`965 + M + mm + pp`). RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.

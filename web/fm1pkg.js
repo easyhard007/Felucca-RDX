@@ -10,6 +10,8 @@ export const STOCK_APP_SIZE = 0x8DFBC;
 export const STOCK_V15_SIZE = 699956;
 export const STOCK_V16_SHA256 = "d017fb65e70aca97ee29d944470c3515a74581df5c0576bf70de917c7b2b61d5";
 export const STOCK_V16_SIZE = 718196;
+const STOCK_V15_VOICES_SHA256 = "ecad0b8620f9d784d46c8da1e3c5de02c40214649ed8dec218026431046aad25";
+const STOCK_V15_VOICES_LENGTH = 0x4000;
 
 const STOCK_RELEASES = [
   { version: "V15", sha256: STOCK_V15_SHA256, size: STOCK_V15_SIZE, product: "FM-1_015",
@@ -127,6 +129,7 @@ export class Package {
       enc(e, 0, 0x50);
       const z = e.subarray(0x40, 0x50).indexOf(0);
       this.entries.push({ off, type: u16(e, 0), dcrc: u16(e, 4), dataOff: u32(e, 8), size: u32(e, 12),
+        storedSize: u32(e, 16), encipheredLength: u32(e, 24),
         name: String.fromCharCode(...e.subarray(0x40, z < 0 ? 0x50 : 0x40 + z)), plain: e });
     }
     const fl = this.entries.find((e) => e.type === 0);
@@ -254,6 +257,31 @@ export async function sha256hex(bytes) {
   return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+// V15's package carries its 128 stock voices in an enciphered USR part.  The
+// firmware updater intentionally does not copy that part; after V15 boots the
+// installer writes these four 4 KiB banks through V15's voice-bank protocol.
+// Derive them only from the byte-for-byte official package and pin the decoded
+// bytes as well, so a malformed package can never become voice-bank data.
+async function factoryVoicesFromV15(bytes, pkg) {
+  const part = pkg.entries.find((e) => e.type === 50 && e.name === "USR");
+  if (!part || part.encipheredLength !== part.storedSize || part.size < STOCK_V15_VOICES_LENGTH ||
+      part.storedSize < part.size) throw new Error("The official V15 factory-voice part is missing or damaged.");
+  const image = logicalImage(bytes);
+  if (part.dataOff + part.storedSize > image.length)
+    throw new Error("The official V15 factory-voice part is truncated.");
+  const plain = image.slice(part.dataOff, part.dataOff + part.storedSize);
+  for (let start = 0; start < plain.length; start += 32) {
+    const n = Math.min(32, plain.length - start);
+    enc(plain, start, n, (0x980F ^ ((part.dataOff + start) >>> 2)) & 0xFFFF);
+  }
+  if (crc16(plain.subarray(0, part.size)) !== part.dcrc)
+    throw new Error("The official V15 factory-voice checksum does not match.");
+  const voices = plain.slice(0, STOCK_V15_VOICES_LENGTH);
+  if (await sha256hex(voices) !== STOCK_V15_VOICES_SHA256)
+    throw new Error("The decoded V15 factory voices do not match the known set.");
+  return voices;
+}
+
 // Only known, unmodified official releases are accepted for a return to stock.
 // Each digest pins every file and loader; the parsed layout is checked as a
 // second guard.  Filenames are not evidence.
@@ -268,7 +296,8 @@ export async function validateStockPackage(bytes) {
       pkg.appOff !== release.appOff || pkg.app.size !== release.appSize ||
       !pkg.entries.some((e) => e.type === 100 && e.name === "ota.bin" && e.size === release.otaSize))
     throw new Error("The official firmware has an unsupported FM-1 layout.");
-  return { product: pkg.product, image: logicalImage(bytes), sha256, version: release.version };
+  const factoryVoices = release.version === "V15" ? await factoryVoicesFromV15(bytes, pkg) : null;
+  return { product: pkg.product, image: logicalImage(bytes), sha256, version: release.version, factoryVoices };
 }
 
 // official V15 + Felucca app -> installable package (Uint8Array)

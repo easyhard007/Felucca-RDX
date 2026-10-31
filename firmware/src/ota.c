@@ -10,8 +10,13 @@
  *     then write the UPDATA_PARM record (flash 0xE4F00 + RAM 0x01C7FD88) and
  *     reset. The SPL runs the loader, which installs the package.
  * V15 uses this firmware's 0x93000 flash layout.  The official V16 package
- * extends flash.bin to 0xA9000; it is accepted only with its known flash CRC,
- * official loader and two CRC32s covering its complete 16 KiB flash head.
+ * extends flash.bin to 0xA9000.  The exact official V15 and V16 packages are
+ * accepted with their known flash CRC, official loader and two CRC32s covering
+ * the complete 16 KiB flash head; neither head has to equal the one currently
+ * installed.  Stock OTA never writes the USR partition that contains its 128
+ * voices, so this code always preserves it.  The browser installer restores
+ * V15's factory banks through V15's MIDI voice-write commands.  After host
+ * confirmation, incompatible VM/global data are erased without touching USR.
  * Nothing is committed before the host's "success"; a failure after the
  * staging began erases the staging area, and Felucca carries on. A package
  * whose flash.bin is not exactly this board's size (OTA_FL_LEN: another
@@ -32,6 +37,11 @@
 #define OTA_RES (OTA_AREA + OTA_AREA_LEN - 0x100u)  /* 0xE4F00 = 4K boundary - 256: SPL scan */
 #define OTA_FL_LEN 0x93000u                      /* flash.bin = [0, the PRCT end): the head and this board's app area,
                                                   * the size the update loader writes (ldr_core.c LDR_APP_HI) */
+#define OTA_V15_FL_CRC 0x9B24u                   /* official FM-1 V15 flash.bin data CRC16 */
+#define OTA_V15_HEAD0_CRC32 0xB06E6B83u          /* flash.bin [0x0000,0x2000) */
+#define OTA_V15_HEAD1_CRC32 0x72CCF27Fu          /* flash.bin [0x2000,0x4000) */
+#define OTA_STOCK_USR 0xEA000u
+#define OTA_STOCK_USR_END 0xFC000u
 #define OTA_V16_FL_LEN 0xA9000u                  /* official FM-1 V16 (2026-10-21), not a Felucca package */
 #define OTA_V16_FL_CRC 0x79C4u                   /* UFW flash.bin data CRC16 */
 #define OTA_V16_HEAD0_CRC32 0x5389A4DAu          /* flash.bin [0x0000,0x2000) */
@@ -49,6 +59,8 @@ static void ota_idle(void);
 static int ota_erase(uint32_t off);
 static int ota_prog(uint32_t off, const void *p, uint32_t n);
 static int ota_fread(uint32_t off, void *p, uint32_t n);
+static int ota_stock_erase(uint32_t off);
+static int ota_clean_stock(void);                /* erase incompatible persistent data; exact official packages only */
 static void ota_show(uint32_t step, int32_t code);
 static void ota_commit(const uint8_t *parm);
 
@@ -186,6 +198,7 @@ static void ota_service(void)
 
 /* one read request (3 tries x 5 s); data -> dst */
 static uint32_t ota_deadline;                    /* 0 = none; else ota_now_ms() limit of the session */
+static uint8_t ota_stock_clean;
 
 static int ota_read(uint32_t addr, uint8_t *dst, uint32_t len)
 {
@@ -250,7 +263,7 @@ static int ota_stage_head(uint32_t len)
 }
 
 /* UFW header + entry list (hdr: 1 KiB) from the host -> offset / length of
- * flash.bin (entry type 0) and ota.bin (type 100), 0 if absent; -1 read, -2 CRC */
+ * flash.bin (type 0) and ota.bin (type 100), 0 if absent; -1 read, -2 CRC. */
 static int ota_ufw(uint8_t *hdr, uint32_t *fl_off, uint32_t *fl_len, uint32_t *ota_off, uint32_t *ota_len)
 {
     uint32_t i, nent;
@@ -282,8 +295,10 @@ static int ota_ufw(uint8_t *hdr, uint32_t *fl_off, uint32_t *fl_len, uint32_t *o
 static int ota_stage(void)                       /* steps 1..6; 0 = host said success */
 {
     static uint8_t hdr[0x400] __attribute__((section(".pool"))), b[512] __attribute__((section(".pool"))), mine[512] __attribute__((section(".pool")));
-    uint32_t i, n, ota_off, ota_len, fl_off, fl_len, fl_crc = ~0u, c, len, own, official, stock_v16;
+    uint32_t i, n, ota_off, ota_len, fl_off, fl_len, fl_crc = ~0u;
+    uint32_t c, len, own, official, stock_v15, stock_v16;
     int rc;
+    ota_stock_clean = 0;
     /* 1. UFW header + entry list */
     ota_show(1, 0);
     if ((rc = ota_ufw(hdr, &fl_off, &fl_len, &ota_off, &ota_len)) != 0)
@@ -306,15 +321,16 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
         ota_rd32(b + 0x20 + 8) != 0x01C0A800u)
         return -7;
     official = ota_rd16(b) == OTA_LDR_HCRC && ota_rd16(b + 2) == OTA_LDR_DCRC && len == OTA_LDR_LEN;
+    stock_v15 = official && fl_len == OTA_FL_LEN && fl_crc == OTA_V15_FL_CRC;
     for (i = 0x48, own = 0; i + 16u <= 0x48u + 64u && !own; i++)    /* first LZ4 literals: crt0_ldr.S */
         own = ota_memeq(b + i, (const uint8_t *)"FELUCCA-LOADER-1", 16) && ota_rd32(b + 0x20 + 4) <= 0x14000u;
     if (!official && !own)
         return -7;
     if (stock_v16 && !official)
         return -7;                                          /* the larger layout is only safe with the vendor loader */
-    if (official) {                    /* the official loader writes the head: it must equal ours */
+    if (official) {                    /* the official loader writes the head */
         ota_show(2, 0);
-        if (stock_v16) {
+        if (stock_v15 || stock_v16) {
             uint32_t h0 = 0xFFFFFFFFu, h1 = 0xFFFFFFFFu;
             for (i = 0; i < 0x4000u; i += 512u) {
                 if (ota_read(fl_off + i, b, 512))
@@ -322,9 +338,15 @@ static int ota_stage(void)                       /* steps 1..6; 0 = host said su
                 if (i < 0x2000u) h0 = ota_crc32(b, 512, h0);
                 else h1 = ota_crc32(b, 512, h1);
             }
-            if ((h0 ^ 0xFFFFFFFFu) != OTA_V16_HEAD0_CRC32 || (h1 ^ 0xFFFFFFFFu) != OTA_V16_HEAD1_CRC32)
+            h0 ^= 0xFFFFFFFFu;
+            h1 ^= 0xFFFFFFFFu;
+            if ((stock_v15 && (h0 != OTA_V15_HEAD0_CRC32 || h1 != OTA_V15_HEAD1_CRC32)) ||
+                (stock_v16 && (h0 != OTA_V16_HEAD0_CRC32 || h1 != OTA_V16_HEAD1_CRC32)))
                 return -5;
+            ota_stock_clean = 1;
         } else {
+            /* A V15-derived third-party package with the vendor loader keeps
+             * the older conservative rule: its head must match the device. */
             for (i = 0; i < 0x4000u; i += 512u) {
                 if (ota_read(fl_off + i, b, 512) || ota_fread(i, mine, 512))
                     return -4;
@@ -409,6 +431,14 @@ static int ota_session(void)
     ota_show(9, 1);                                 /* 1 = dry run complete */
     return 1;
 #endif
+    if (ota_stock_clean) {
+        ota_show(6, 0);
+        if (ota_clean_stock()) {
+            ota_unstage();
+            ota_show(9, -16);
+            return -16;
+        }
+    }
 #ifndef FELUCCA_OTA_RAMONLY
 #define FELUCCA_OTA_RAMONLY 0                       /* 1: RAM record only, no power-loss resume (a power
                                                      * cycle leaves a broken loader behind) */

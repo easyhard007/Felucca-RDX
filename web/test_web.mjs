@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { Package, logicalImage, productOf, validateFm1Package } from "./fm1pkg.js";
+import { Package, logicalImage, productOf, validateFm1Package, validateStockPackage } from "./fm1pkg.js";
 import { Updater, pack7, unpack7 } from "./fm1ota.js";
 
 let failed = 0;
@@ -1703,6 +1703,12 @@ sys.stdout.buffer.write(b"".join(raw[i * 48:i * 48 + 47] for i in range(20)) + r
   let rejected = false;
   try { validateFm1Package(other.serialize()); } catch (_) { rejected = true; }
   ok(rejected, "fm1pkg.js rejects a local package for another device");
+  const v15file = join(FW_ROOT, "firmware/FM-1-v15.fwsc");
+  if (existsSync(v15file)) {
+    const v15 = await validateStockPackage(readFileSync(v15file));
+    ok(v15.product === "FM-1_015" && v15.factoryVoices?.length === 0x4000,
+      "fm1pkg.js decrypts and pins V15's 128 factory voices");
+  }
 }
 
 /* ------------------------------------------------- update protocol (fm1ota.js) --- */
@@ -1713,6 +1719,7 @@ const UPGRADE = [0xF0, 0x22, 0x24, 0x35, 0x7F, 0xF7];
 class FakeFM1 {
   constructor(image, { unplugAfter = Infinity } = {}) {
     this.image = image; this.unplugAfter = unplugAfter; this.served = 0; this.bad = 0;
+    this.voices = new Uint8Array(0x4000).fill(0xA5);
     this.access = { inputs: new Map(), outputs: new Map() };
     this.boot("FM-1_015", "FM-1");
   }
@@ -1739,7 +1746,18 @@ class FakeFM1 {
         ? [...Array.from({ length: 6 }, (_, k) => [k * 512, 512]), [0xF0000000, 8]]
         : [[0, 64], [0x40, 160], [0x1000, 512], [0xE0000000, 8]];
       this.next();
-    } else if (this.waiting) {
+    } else {
+      const msg = d[0] === 0xF0 && d.at(-1) === 0xF7 ? unpack7(d.slice(1, -1)) : [];
+      const n = msg.length >= 7 ? msg[3] | (msg[4] << 8) | (msg[5] << 16) : -1;
+      if ((msg[2] === 0x21 || msg[2] === 0x22) && msg.length === n + 7) {
+        const p = msg.slice(6, 6 + n), addr = (p[1] | (p[2] << 8) | (p[3] << 16) | (p[4] << 24)) >>> 0;
+        if (msg[2] === 0x21 && p[0] === 5 && !(addr & 0xFFF) && addr + 0x1000 <= this.voices.length)
+          this.voices.fill(0xFF, addr, addr + 0x1000);
+        else if (msg[2] === 0x22 && p[0] === 5 && p[5] === 0 && p[6] === 2 && p[7] === 0 && addr + 512 <= this.voices.length)
+          this.voices.set(p.slice(8, 520), addr);
+        else this.bad++;
+        this.tx([0xF0, ...pack7([0, 0x59, 0, 1, 0, 0, 0, 0xFF]), 0xF7]);
+      } else if (this.waiting) {
       const u = unpack7(d.slice(1, -1));
       const [addr, len] = this.waiting;
       const got = u.slice(14, 14 + (addr >= 0xE0000000 ? 8 : len));
@@ -1751,6 +1769,7 @@ class FakeFM1 {
       if (addr === 0xE0000000) setTimeout(() => this.boot("ota-FM-1_900", "Felucca Update"), 300);
       else if (addr === 0xF0000000) setTimeout(() => this.boot("FM-1_900", "Felucca"), 300);
       else this.next();
+      }
     }
   }
   next() {
@@ -1805,6 +1824,12 @@ async function updater() {
   const stuckFound = await stuck.find(() => true);
   ok(stuckFound === null && Date.now() - stuckAt < 500 && stuckLog.some((s) => /timed out/i.test(s)),
     "fm1ota.js: a busy MIDI port times out and returns control to the installer");
+
+  const voiceDev = new FakeFM1(image), voices = Uint8Array.from({length:0x4000}, (_, i) => (i * 31 + 3) & 0xFF);
+  let voiceProgress = 0;
+  await new Updater(voiceDev.access).restoreFactoryVoices(voices, (done) => { voiceProgress = done; });
+  ok(voiceDev.bad === 0 && eq(voiceDev.voices, voices) && voiceProgress === voices.length,
+    "fm1ota.js: V15 erases and restores all four factory voice banks");
 }
 
 await editorMock();

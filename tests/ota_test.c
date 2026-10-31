@@ -19,7 +19,7 @@ static uint8_t *logical;
 static size_t logical_len;
 static uint8_t rx[1024];                 /* one pending host frame (7-bit bytes) */
 static uint32_t rx_len, rx_full;
-static uint32_t now_ms, requests, ident_replies, mute_after = 0xFFFFFFFFu, bad_erase, erases;
+static uint32_t now_ms, requests, ident_replies, mute_after = 0xFFFFFFFFu, bad_erase, erases, stock_cleans;
 static int committed;
 static uint8_t committed_parm[112];
 static int32_t last_code;
@@ -111,6 +111,25 @@ static int ota_prog(uint32_t off, const void *src, uint32_t n)
     return 0;
 }
 static int ota_fread(uint32_t off, void *dst, uint32_t n) { memcpy(dst, nor + off, n); return 0; }
+static int ota_stock_erase(uint32_t off)
+{
+    if ((off & 0xFFFu) ||
+        !((off >= 0x93000u && off < 0xE0000u) || (off >= 0xE5000u && off < 0xEA000u) ||
+          (off >= 0xFC000u && off < 0xFF000u))) {
+        bad_erase++;
+        return -1;
+    }
+    memset(nor + off, 0xFF, 0x1000u);
+    return 0;
+}
+static int ota_clean_stock(void)
+{
+    stock_cleans++;
+    memset(nor + 0x93000u, 0xFF, 0xE0000u - 0x93000u);
+    memset(nor + 0xE5000u, 0xFF, 0xEA000u - 0xE5000u);
+    memset(nor + 0xFC000u, 0xFF, 0xFF000u - 0xFC000u);
+    return 0;
+}
 static void ota_show(uint32_t step, int32_t code) { if (step == 9) last_code = code; }
 static void ota_commit(const uint8_t *parm) { committed = 1; memcpy(committed_parm, parm, 112); }
 
@@ -144,6 +163,21 @@ static uint32_t package_flash_size(void)
         if (ota_rd16(e) == 0) return ota_rd32(e + 12);
     }
     return 0;
+}
+
+static uint32_t package_flash_crc(void)
+{
+    uint8_t h[0x400];
+    uint32_t i, n;
+    memcpy(h, logical, sizeof h);
+    ota_jl_enc(h, 0x40);
+    n = ota_rd16(h + 8);
+    for (i = 0; i < n; i++) {
+        uint8_t *e = h + 0x40 + i * 0x50u;
+        ota_jl_enc(e, 0x50);
+        if (ota_rd16(e) == 0) return ota_rd16(e + 4);
+    }
+    return ~0u;
 }
 
 /* rewrite flash.bin's size in the logical image's UFW entry list (the entries' and the header's CRCs too): a package
@@ -185,7 +219,7 @@ static void reset_dev(void)
 {
     memset(nor, 0xFF, sizeof nor);
     memcpy(nor, logical + 0x400, 0x4000);                 /* device flash head = package flash.bin head */
-    rx_full = 0; requests = 0; ident_replies = 0; committed = 0; last_code = 0;
+    rx_full = 0; requests = 0; ident_replies = 0; committed = 0; last_code = 0; stock_cleans = 0;
     mute_after = 0xFFFFFFFFu; corrupt_at = NULL; bad_erase = 0; erases = 0;
 }
 
@@ -194,7 +228,7 @@ int main(int argc, char **argv)
     FILE *f;
     uint8_t *raw;
     size_t n, i;
-    uint32_t fl_size;
+    uint32_t fl_size, fl_crc, stock_pkg, stock_v15_pkg;
     int bad = 0, rc;
     if (argc < 2) { printf("usage: ota_test FILE.fwsc\n"); return 2; }
     f = fopen(argv[1], "rb");
@@ -208,6 +242,10 @@ int main(int argc, char **argv)
     memcpy(logical + 20 * 47, raw + 20 * 48, n - 20 * 48);
     logical_len = n - 20;
     fl_size = package_flash_size();
+    fl_crc = package_flash_crc();
+    stock_v15_pkg = fl_size == OTA_FL_LEN && fl_crc == OTA_V15_FL_CRC;
+    stock_pkg = stock_v15_pkg ||
+                (fl_size == OTA_V16_FL_LEN && fl_crc == OTA_V16_FL_CRC);
 
     /* handshake outside a session */
     reset_dev();
@@ -222,11 +260,19 @@ int main(int argc, char **argv)
 
     /* full session */
     reset_dev();
+    if (stock_pkg) {
+        memset(nor + 0x93000u, 0xA5, 0xE0000u - 0x93000u);
+        memset(nor + 0xE5000u, 0xA5, 0xFF000u - 0xE5000u);
+        nor[0x1000u] ^= 1u;                         /* target head need not equal the installed V15/V16 head */
+    }
     rc = ota_session();
-    printf("  %u requests\n", requests);
+    printf("  %u requests, rc %d\n", requests, rc);
     bad += check("session commits (supported flash.bin layout)", rc == 0 && committed);
+    bad += check(stock_pkg ? "stock package clears incompatible VM but preserves USR" : "own package preserves persistent data",
+                 stock_pkg ? stock_cleans == 1u && nor[0x93000u] == 0xFFu && nor[0xFC000u] == 0xFFu &&
+                             nor[OTA_STOCK_USR] == 0xA5u : stock_cleans == 0u);
     bad += check("headers + loader + confirm request count",
-                 requests >= 10 && requests <= (fl_size == OTA_V16_FL_LEN ? 90u : 30u));
+                 requests >= 10 && requests <= (stock_pkg ? 90u : 30u));
     {
         uint8_t *h = nor + 0xE0000, *p = committed_parm;
         bad += check("staged body == the package's loader", !memcmp(nor + 0xE0020, logical + ota_body_off(), 64));

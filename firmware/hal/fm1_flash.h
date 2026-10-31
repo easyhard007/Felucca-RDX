@@ -185,6 +185,31 @@ static RAMFN int fl_erase4k_ram(uint32_t off, uint32_t *took_us)
     return rc;
 }
 
+/* Narrow exception used only after an exact official V15/V16 package has
+ * passed step-1 validation and the host has confirmed the update.  It cannot
+ * touch the running app, the staged loader, or the key/MAC sector. */
+#ifndef FELUCCA_LOADER
+static RAMFN int fl_erase4k_stock_ram(uint32_t off, uint32_t *took_us)
+{
+    fl_saved_t s; int rc;
+    if ((!FL_IN(off, 0x1000u, 0x93000u, 0xE0000u) &&
+         !FL_IN(off, 0x1000u, 0xE5000u, 0xEA000u) &&
+         !FL_IN(off, 0x1000u, 0xFC000u, 0xFF000u)) || (off & 0xFFFu))
+        return -1;
+    if (fl_enter(&s)) return -2;
+    fl_wren();
+    if (!(fl_rdsr(0x05) & 2u)) rc = -3;
+    else {
+        fl_cs(0); fl_tx(0x20); fl_addr(off); fl_cs(1);
+        fl_inval(off, 4096u);
+        rc = fl_wait_ready(500000u, took_us);
+    }
+    fl_exit(&s);
+    return rc;
+}
+
+#endif
+
 static RAMFN int fl_prog_ram(uint32_t off, const uint8_t *src, uint32_t n, uint32_t *took_us)
 {
     fl_saved_t s; int rc; uint32_t i;
