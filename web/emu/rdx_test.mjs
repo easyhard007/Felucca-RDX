@@ -6,6 +6,7 @@ import fs from "fs";
 const bytes = fs.readFileSync(process.argv[2] || "build/emu/felucca.wasm");
 const versionHeader = fs.readFileSync("firmware/src/rdx_version.h", "utf8");
 const uiDrawSource = fs.readFileSync("firmware/src/ui_draw.c", "utf8");
+const voiceSource = fs.readFileSync("firmware/src/voice.c", "utf8");
 const versionMatch = versionHeader.match(/^#define RDX_VERSION "([^"]+)"$/m);
 if (!versionMatch) throw new Error("Cannot read RDX_VERSION from firmware/src/rdx_version.h");
 const expectedFirmwareVersion = `RDX ${versionMatch[1]}`;
@@ -61,6 +62,7 @@ const d = await boot();
 const held = await boot();
 const effected = await boot();
 const fxab = await boot();
+const sustain = await boot();
 {
   const { instance } = await WebAssembly.instantiate(bytes, {});
   const migration = instance.exports;
@@ -74,8 +76,9 @@ const fxab = await boot();
 }
 check("engine reports an eight-voice limit", d.ex.web_test_engine_poly() === 8);
 check("RDX firmware has one runtime track", d.ex.web_test_track_count() === 1);
-check("AUDIO LATE remains an INFO diagnostic without a giant popup",
-      !uiDrawSource.includes("draw_audio_late_notice"));
+check("diagnostic build shows AUDIO LATE over every page and retains four records",
+      uiDrawSource.includes("draw_audio_late_notice") &&
+      voiceSource.includes("AUDIO_LATE_HISTORY 4u"));
 check("RDX editor exposes only canonical engine slot 12",
       d.ex.web_test_visible_engine_count() === 1 && d.ex.web_test_first_visible_engine() === 12);
 check("32 Factory and 21 Selected RDX voices are visible", d.ex.web_test_preset_total() === 53);
@@ -90,6 +93,10 @@ for (let shown = 0; shown < 53; shown++) {
 }
 check("Editor device presets map 53 unique visible slots bidirectionally", editorSlotsOk);
 check("RDX renderer is fixed to OPTIMIZED", d.ex.web_test_rdx_type() === 1);
+check("all 128 note-start table rows exactly match the original formulas",
+      d.ex.web_test_rdx_note_table_exact() === 0);
+check("large Reverb and Chorus stores clear only through main-loop maintenance",
+      d.ex.web_test_rdx_deferred_fx_clear() === 0);
 d.ex.web_test_rdx_type_set(0);
 check("legacy callers cannot switch the renderer back to ORIGIN", d.ex.web_test_rdx_type() === 1);
 check("retired RDX TYPE, PHS MODEL and FLG MODEL entries are absent from MENU",
@@ -529,6 +536,24 @@ check("three simultaneous releases keep all de-click tails alive", d.ex.web_test
 for (const note of [48, 52, 55]) held.ex.web_midi(0x80, note, 0);
 d.render(1500);
 held.render(1500);
+
+sustain.ex.web_test_rdx_preset(0);
+sustain.ex.web_test_rdx_dry();
+sustain.ex.web_test_audio_flush();
+for (const note of [48, 52, 55, 60]) sustain.ex.web_midi(0x90, note, 100);
+sustain.renderFrames(128);
+sustain.ex.web_midi(0xB0, 64, 127);                    // damper down
+sustain.renderFrames(128);
+for (const note of [48, 52, 55, 60]) sustain.ex.web_midi(0x80, note, 0);
+sustain.renderFrames(128 * 8);
+check("damper holds all released notes", sustain.ex.web_test_active_voices() === 4);
+sustain.ex.web_midi(0xB0, 64, 0);                      // one CC releases the batch
+sustain.renderFrames(128);
+check("pedal-up batch enters release without hard-killing voices",
+      sustain.ex.web_test_active_voices() === 4);
+sustain.render(2500);
+check("pedal-up batch eventually releases every voice",
+      sustain.ex.web_test_active_voices() === 0);
 
 d.ex.web_test_rdx_preset(0);
 const stressNotes = [48, 50, 52, 53, 55, 57, 59, 60, 64];

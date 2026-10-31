@@ -63,23 +63,52 @@ typedef struct {
 
 typedef struct {
     rdx_op_t op[4];
-    rdx_patch_t patch;                          /* immutable snapshot for this note */
     int32_t dc, last_out, correction;
     int32_t base_pitch, pitch, pitch_target;    /* absolute semitones, Q16 */
     int32_t peg, peg_target, peg_step;           /* level around centre 64, Q16 */
     uint32_t porta_left;
     uint32_t lfo_phase, lfo_random;
     uint32_t lfo_fade, lfo_fade_total;
-    uint32_t pm_depth;                          /* immutable patch values cached off the sample path */
-    uint16_t am_depth[4], fb_scale[4];
+    uint16_t fb_scale[4];
     int16_t fb_macro;
-    uint16_t norm;
     uint16_t tail_left;
     uint8_t correction_left;
-    uint8_t live, down, algorithm, transition_pending, ending;
+    uint8_t live, down, transition_pending, ending;
     uint8_t peg_stage, peg_rising, lfo_sh_step;
+
+    /* Everything below this boundary is immutable while a note renders.  A
+     * voice keeps it across retriggers of the same published patch, and the
+     * Core1 timeout snapshot therefore needs only the smaller runtime prefix. */
+    rdx_patch_t patch;
+    uint32_t patch_generation;
+    uint32_t pm_depth;                          /* patch values cached off the sample path */
+    uint16_t am_depth[4];
+    uint16_t norm;
+    uint8_t algorithm;
     uint8_t carriers, enable_mask, fb_type_mask, amd_mask, pmd_mask, peg_mask;
 } rdx_note_t;
+
+#define RDX_NOTE_RUNTIME_SIZE ((uint32_t)__builtin_offsetof(rdx_note_t, patch))
+
+typedef struct {
+    uint32_t pm_depth;
+    uint16_t am_depth[4];
+    uint16_t norm;
+    uint8_t algorithm;
+    uint8_t carriers, enable_mask, fb_type_mask, amd_mask, pmd_mask, peg_mask;
+} rdx_patch_cache_t;
+
+/* Note-start values that depend only on the published patch and the final
+ * 0..127 key.  Building all 128 possibilities outside the audio interrupt
+ * replaces four keyboard-scaling divisions, four rate-scaling divisions and
+ * the usual four 64-bit base-frequency calculations with indexed loads. */
+typedef struct {
+    uint32_t level_scale[128][4];
+    uint32_t base_inc[128][4];
+    uint8_t rate_offset[128][4];
+} rdx_note_table_t;
+
+static void rdx_note_table_build(rdx_note_table_t *table, const rdx_patch_t *p);
 
 ENG_MEM_FITS("RDX", sizeof(rdx_note_t) * RDX_POLY);
 
@@ -100,6 +129,9 @@ static const uint8_t RDX_ROUTES[12][4] = {
  * audio ISR takes a private per-note snapshot, so a transfer cannot tear a
  * sounding voice. */
 static rdx_patch_t rdx_track_patch[NTRK][2];
+static rdx_patch_cache_t rdx_track_cache[NTRK][2];
+static rdx_note_table_t rdx_track_note_table[NTRK][2];
+static uint32_t rdx_track_generation[NTRK][2], rdx_generation_seq;
 static volatile uint8_t rdx_track_sel[NTRK];
 static uint8_t rdx_track_slot[NTRK], rdx_track_custom, rdx_track_valid;
 /* Touch Wah has no touch strip on FM-1.  SELECT is its manual centre control;
@@ -200,23 +232,37 @@ static uint32_t rdx_preset_rank(uint32_t preset)
     return 0u;
 }
 
-static void rdx_note_cache(rdx_note_t *n)
+static void rdx_patch_cache_build(rdx_patch_cache_t *c, const rdx_patch_t *p)
 {
-    uint32_t k, alg = n->algorithm % 12u;
-    n->carriers = RDX_CARRIERS[alg];
-    n->norm = (uint16_t)(alg < 5u ? 32768u : alg < 8u ? 23170u : alg < 11u ? 18919u : 16384u);
-    n->pm_depth = RDX_PM_DEPTH_Q16[n->patch.common.lfo_pmd & 127u];
-    n->enable_mask = n->fb_type_mask = n->amd_mask = n->pmd_mask = n->peg_mask = 0u;
+    uint32_t k, alg = p->common.algorithm % 12u;
+    c->algorithm = (uint8_t)alg;
+    c->carriers = RDX_CARRIERS[alg];
+    c->norm = (uint16_t)(alg < 5u ? 32768u : alg < 8u ? 23170u : alg < 11u ? 18919u : 16384u);
+    c->pm_depth = RDX_PM_DEPTH_Q16[p->common.lfo_pmd & 127u];
+    c->enable_mask = c->fb_type_mask = c->amd_mask = c->pmd_mask = c->peg_mask = 0u;
     for (k = 0; k < 4u; k++) {
-        const rdx_op_param_t *p = &n->patch.op[k];
-        n->am_depth[k] = RDX_AM_DEPTH_Q15[p->lfo_amd & 127u];
-        n->enable_mask |= (uint8_t)(!!p->enable << k);
-        n->fb_type_mask |= (uint8_t)(!!p->fb_type << k);
-        n->amd_mask |= (uint8_t)(!!p->lfo_amd << k);
-        n->pmd_mask |= (uint8_t)(!!p->lfo_pmd_enable << k);
-        n->peg_mask |= (uint8_t)(!!p->peg_enable << k);
+        const rdx_op_param_t *o = &p->op[k];
+        c->am_depth[k] = RDX_AM_DEPTH_Q15[o->lfo_amd & 127u];
+        c->enable_mask |= (uint8_t)(!!o->enable << k);
+        c->fb_type_mask |= (uint8_t)(!!o->fb_type << k);
+        c->amd_mask |= (uint8_t)(!!o->lfo_amd << k);
+        c->pmd_mask |= (uint8_t)(!!o->lfo_pmd_enable << k);
+        c->peg_mask |= (uint8_t)(!!o->peg_enable << k);
     }
-    n->fb_macro = INT16_MIN;                    /* force the four feedback coefficients to be filled */
+}
+
+static void rdx_note_cache_install(rdx_note_t *n, const rdx_patch_cache_t *c)
+{
+    n->pm_depth = c->pm_depth;
+    memcpy(n->am_depth, c->am_depth, sizeof n->am_depth);
+    n->norm = c->norm;
+    n->algorithm = c->algorithm;
+    n->carriers = c->carriers;
+    n->enable_mask = c->enable_mask;
+    n->fb_type_mask = c->fb_type_mask;
+    n->amd_mask = c->amd_mask;
+    n->pmd_mask = c->pmd_mask;
+    n->peg_mask = c->peg_mask;
 }
 
 static uint32_t rdx_track_index(const track_t *t)
@@ -376,6 +422,30 @@ static const rdx_patch_t *rdx_track_get(uint32_t tr)
     return &rdx_track_patch[tr][rdx_track_sel[tr] & 1u];
 }
 
+/* Return a patch and its already prepared audio-rate constants from the same
+ * published double-buffer slot.  The fallback covers early boot/legacy host
+ * paths before rdx_track_loaded() has published the selected factory patch. */
+static const rdx_patch_t *rdx_note_source(const track_t *t, uint32_t slot,
+                                          const rdx_patch_cache_t **cache,
+                                          const rdx_note_table_t **table,
+                                          uint32_t *generation)
+{
+    uint32_t tr = rdx_track_index(t), sel;
+    if ((rdx_track_valid & (1u << tr)) &&
+        ((rdx_track_custom & (1u << tr)) || rdx_track_slot[tr] == slot)) {
+        RING_PUBLISH();
+        sel = rdx_track_sel[tr] & 1u;
+        *cache = &rdx_track_cache[tr][sel];
+        *table = &rdx_track_note_table[tr][sel];
+        *generation = rdx_track_generation[tr][sel];
+        return &rdx_track_patch[tr][sel];
+    }
+    *cache = 0;
+    *table = 0;
+    *generation = 0x80000000u | (slot + 1u);
+    return (const rdx_patch_t *)RDX_PATCHES[slot].patch;
+}
+
 /* A librarian audition installs an editable track patch without changing the
  * old factory preset number.  HOME must therefore name the live patch, not
  * the factory slot that happened to be selected before the audition. */
@@ -416,6 +486,11 @@ static void rdx_track_set(uint32_t tr, const rdx_patch_t *src, int custom)
     next = (rdx_track_sel[tr] ^ 1u) & 1u;
     memcpy(&rdx_track_patch[tr][next], src, sizeof *src);
     rdx_patch_sanitize(&rdx_track_patch[tr][next]);
+    rdx_patch_cache_build(&rdx_track_cache[tr][next], &rdx_track_patch[tr][next]);
+    rdx_note_table_build(&rdx_track_note_table[tr][next], &rdx_track_patch[tr][next]);
+    if (!++rdx_generation_seq)                       /* zero means no cached patch in a voice */
+        rdx_generation_seq = 1u;
+    rdx_track_generation[tr][next] = rdx_generation_seq;
     RING_PUBLISH();
     rdx_track_sel[tr] = (uint8_t)next;
     rdx_track_valid |= (uint8_t)(1u << tr);
@@ -536,12 +611,20 @@ static rdx_note_t *rdx_note(track_t *t, voice_t *v)
 static void rdx_voice_settings_set(track_t *t, uint32_t mode, uint32_t porta)
 {
     rdx_patch_t p;
+    const rdx_patch_t *current;
+    const rdx_patch_cache_t *cache;
+    const rdx_note_table_t *table;
+    uint32_t generation;
     uint32_t tr = rdx_track_index(t), i;
     mode = mode > 2u ? 2u : mode;
     porta = porta > 127u ? 127u : porta;
-    rdx_patch_for_track(tr, &p);
-    if (p.common.mono_poly == mode && p.common.porta_time == porta)
+    current = rdx_note_source(t,
+                              (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPATCHES - 1),
+                              &cache, &table, &generation);
+    (void)cache; (void)table; (void)generation;
+    if (current->common.mono_poly == mode && current->common.porta_time == porta)
         return;
+    memcpy(&p, current, sizeof p);              /* only a real edit needs a private copy */
     p.common.mono_poly = (uint8_t)mode;
     p.common.porta_time = (uint8_t)porta;
     rdx_track_set(tr, &p, 1);
@@ -978,6 +1061,22 @@ static uint32_t rdx_op_inc(const rdx_op_param_t *p, uint32_t base_inc, int32_t r
     return inc;
 }
 
+static void rdx_note_table_build(rdx_note_table_t *table, const rdx_patch_t *p)
+{
+    uint32_t note, k;
+    for (note = 0; note < 128u; note++) {
+        uint32_t base_inc = pitch_inc(clamp((int32_t)note * 16 +
+                                            ((int32_t)p->common.transpose - 64) * 16,
+                                            0, 2047));
+        for (k = 0; k < 4u; k++) {
+            const rdx_op_param_t *o = &p->op[k];
+            table->level_scale[note][k] = rdx_level_scaling(o, note);
+            table->rate_offset[note][k] = (uint8_t)rdx_rate_offset(note, o->rate_scaling);
+            table->base_inc[note][k] = rdx_op_inc(o, base_inc, 0, 0);
+        }
+    }
+}
+
 static uint32_t rdx_velocity_gain_q15(uint32_t vel_q8, uint32_t sens)
 {
     uint32_t vi = vel_q8 >> 8, vf = vel_q8 & 255u;
@@ -988,7 +1087,7 @@ static uint32_t rdx_velocity_gain_q15(uint32_t vel_q8, uint32_t sens)
 }
 
 static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel_q8,
-                                int32_t velocity_macro, uint32_t note)
+                                int32_t velocity_macro, uint32_t level_scale)
 {
     uint32_t sens = (uint32_t)clamp((int32_t)p->vel_sens + velocity_macro, 0, 127);
     uint32_t vg = rdx_velocity_gain_q15(vel_q8, sens);
@@ -997,13 +1096,7 @@ static uint32_t rdx_output_gain(const rdx_op_param_t *p, uint32_t vel_q8,
     level = p->out_level;
     level = (level * vg) >> 15;
     return (uint32_t)(((uint64_t)RDX_GAIN_Q15[level > 191u ? 191u : level] *
-                       rdx_level_scaling(p, note)) >> 15);
-}
-
-static uint32_t rdx_algorithm(const track_t *t, const rdx_patch_t *p)
-{
-    (void)t;
-    return p->common.algorithm % 12u;
+                       level_scale) >> 15);
 }
 
 /* The RDX build is one instrument, so its track transpose and the panel octave
@@ -1021,9 +1114,13 @@ static uint32_t rdx_master_note(const track_t *t, uint32_t note)
 static void rdx_note_on(track_t *t, voice_t *v)
 {
     rdx_note_t *n = rdx_note(t, v);
-    const rdx_patch_t *p;
+    const rdx_patch_t *p, *source;
+    const rdx_patch_cache_t *cache;
+    const rdx_note_table_t *table;
+    rdx_patch_cache_t fallback_cache;
     uint32_t slot = (uint32_t)clamp(t->p[P_E7], 0, (int32_t)RDX_NPATCHES - 1);
-    uint32_t k, carrier_index = 0, carriers, base_inc, vel_q8, note;
+    uint32_t k, carrier_index = 0, carriers, base_inc = 0, base_ready = 0;
+    uint32_t vel_q8, note, generation;
     int32_t old_out, old_pitch;
     int was_live;
     if (!n)
@@ -1031,19 +1128,22 @@ static void rdx_note_on(track_t *t, voice_t *v)
     old_out = n->last_out;
     old_pitch = n->pitch;
     was_live = n->live;
-    memset(n, 0, sizeof *n);
-    if ((rdx_track_valid & (1u << rdx_track_index(t))) &&
-        ((rdx_track_custom & (1u << rdx_track_index(t))) ||
-         rdx_track_slot[rdx_track_index(t)] == slot))
-        memcpy(&n->patch, rdx_track_get(rdx_track_index(t)), sizeof n->patch);
-    else
-        memcpy(&n->patch, RDX_PATCHES[slot].patch, sizeof n->patch);
+    source = rdx_note_source(t, slot, &cache, &table, &generation);
+    memset(n, 0, RDX_NOTE_RUNTIME_SIZE);
+    if (n->patch_generation != generation) {
+        memcpy(&n->patch, source, sizeof n->patch);
+        if (!cache) {
+            rdx_patch_cache_build(&fallback_cache, source);
+            cache = &fallback_cache;
+        }
+        rdx_note_cache_install(n, cache);
+        n->patch_generation = generation;
+    }
     p = &n->patch;
+    n->fb_macro = INT16_MIN;                    /* fill feedback coefficients on the first render */
     n->live = n->down = 1;
     n->last_out = old_out;
     n->transition_pending = (uint8_t)was_live;  /* retrigger/steal: join the old waveform */
-    n->algorithm = (uint8_t)rdx_algorithm(t, p);
-    rdx_note_cache(n);
     note = rdx_master_note(t, v->note);
     n->base_pitch = ((int32_t)note + (int32_t)p->common.transpose - 64) * 65536;
     n->pitch_target = n->base_pitch;
@@ -1059,7 +1159,6 @@ static void rdx_note_on(track_t *t, voice_t *v)
     n->lfo_fade_total = RDX_LFO_DELAY_SAMPLES[p->common.lfo_delay & 127u] / 3u;
     n->lfo_fade = p->common.lfo_delay ? 0u : 32768u;
     carriers = RDX_CARRIERS[n->algorithm];
-    base_inc = pitch_inc(clamp((int32_t)note * 16 + ((int32_t)p->common.transpose - 64) * 16, 0, 2047));
     vel_q8 = rdx_note_velocity_q8;
     if (!vel_q8)
         vel_q8 = (uint32_t)(v->mvel ? v->mvel : v->vel) << 8;
@@ -1068,13 +1167,26 @@ static void rdx_note_on(track_t *t, voice_t *v)
         rdx_op_t *o = &n->op[k];
         int carrier = (carriers >> k) & 1u;
         int32_t spread = 0, ratio_macro = carrier ? 0 : t->p[P_E3];
+        uint32_t level_scale;
         if (carrier) {
             static const int8_t SPREAD[4] = {0, 1, -1, 2};
             spread = SPREAD[carrier_index++] * (int32_t)t->p[P_E6] * 12 / 127;
         }
-        o->inc = rdx_op_inc(q, base_inc, ratio_macro, spread);
-        o->out_gain = rdx_output_gain(q, vel_q8, t->p[P_E5], note);
-        o->rate_offset = (uint8_t)rdx_rate_offset(note, q->rate_scaling);
+        if (table && !ratio_macro && !spread)
+            o->inc = table->base_inc[note][k];
+        else {
+            if (!base_ready) {
+                base_inc = pitch_inc(clamp((int32_t)note * 16 +
+                                           ((int32_t)p->common.transpose - 64) * 16,
+                                           0, 2047));
+                base_ready = 1u;
+            }
+            o->inc = rdx_op_inc(q, base_inc, ratio_macro, spread);
+        }
+        level_scale = table ? table->level_scale[note][k] : rdx_level_scaling(q, note);
+        o->out_gain = rdx_output_gain(q, vel_q8, t->p[P_E5], level_scale);
+        o->rate_offset = table ? table->rate_offset[note][k] :
+                         (uint8_t)rdx_rate_offset(note, q->rate_scaling);
         rdx_env_enter(o, q, RDX_ATTACK, o->rate_offset, t->p[P_E4]);
     }
 }

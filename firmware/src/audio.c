@@ -25,10 +25,11 @@ static volatile uint32_t audio_late_notice;             /* DMA-deadline misses s
 enum { AUDIO_LATE_C0 = 1u, AUDIO_LATE_C1 = 2u, AUDIO_LATE_SYNC = 4u };
 static volatile uint8_t audio_late_source;              /* source of the most recent miss, for the overlay */
 static uint32_t audio_last_half_tick;                   /* previous half IRQ, for non-accumulating entry jitter */
+static uint32_t audio_last_late_half;
+static uint16_t audio_late_burst;
 #if FELUCCA_CPU2
 static volatile uint32_t audio_c1_max_us;
 #endif
-static volatile uint32_t t5_nested_ticks;              /* TIMER4 ticks TIMER5 spent nested in this ISR (main.c) */
 static uint32_t audio_cpu_rem;                         /* keep the fractional IIR step: no low-load bias */
 #if FELUCCA_CPU2
 static uint32_t audio_cpu1_rem;
@@ -115,33 +116,72 @@ static void audio_timing_publish(uint32_t wall_ticks, uint32_t nested_ticks, int
 #if FELUCCA_CPU2
     audio_timing.cur.wait = fm1_c1_wait_ticks_half;
     audio_timing.cur.c1 = c1_half_ticks;
+    audio_timing.cur.c1_fm = rdx_voice_ticks_c1;
 #else
     audio_timing.cur.wait = 0;
     audio_timing.cur.c1 = 0;
+    audio_timing.cur.c1_fm = 0;
+#endif
+#if FELUCCA_RDX
+    audio_timing.cur.hall3 = rdx_fx_perf[RDX_FXPERF_HALL3].half_ticks;
+    audio_timing.cur.chorus2 = rdx_fx_perf[RDX_FXPERF_CHORUS2].half_ticks;
 #endif
     audio_timing.cur.c0 = wall_ticks > audio_timing.cur.wait ? wall_ticks - audio_timing.cur.wait : 0u;
     named = audio_timing.cur.pre + audio_timing.cur.rdx_ctl + audio_timing.cur.c0_fm + audio_timing.cur.xfer +
-            audio_timing.cur.post_fx + audio_timing.cur.tail;
+            audio_timing.cur.rdx_fx + audio_timing.cur.mix + audio_timing.cur.post_fx + audio_timing.cur.tail;
     audio_timing.cur.other = audio_timing.cur.c0 > named ? audio_timing.cur.c0 - named : 0u;
 #define AUDIO_US(field) s.field = (audio_timing.cur.field + FM1_TICKS_PER_US / 2u) / FM1_TICKS_PER_US
-    AUDIO_US(wall); AUDIO_US(irq); AUDIO_US(c0); AUDIO_US(wait); AUDIO_US(c1); AUDIO_US(t5);
-    AUDIO_US(pre); AUDIO_US(rdx_ctl); AUDIO_US(c0_fm); AUDIO_US(xfer);
-    AUDIO_US(post_fx); AUDIO_US(tail); AUDIO_US(other);
+    AUDIO_US(wall); AUDIO_US(irq); AUDIO_US(c0); AUDIO_US(wait); AUDIO_US(c1); AUDIO_US(c1_fm); AUDIO_US(t5);
+    AUDIO_US(t5_input); AUDIO_US(t5_uac);
+    AUDIO_US(pre); AUDIO_US(midi); s.midi_events = audio_timing.cur.midi_events;
+    AUDIO_US(rdx_ctl); AUDIO_US(c0_fm); AUDIO_US(xfer);
+    AUDIO_US(rdx_fx); AUDIO_US(mix); AUDIO_US(post_fx); AUDIO_US(tail); AUDIO_US(other);
+    AUDIO_US(hall3); AUDIO_US(chorus2);
 #undef AUDIO_US
 #define AUDIO_PEAK(field) do { if (s.field > audio_timing.peak.field) audio_timing.peak.field = s.field; } while (0)
-    AUDIO_PEAK(wall); AUDIO_PEAK(irq); AUDIO_PEAK(c0); AUDIO_PEAK(wait); AUDIO_PEAK(c1); AUDIO_PEAK(t5);
-    AUDIO_PEAK(pre); AUDIO_PEAK(rdx_ctl); AUDIO_PEAK(c0_fm); AUDIO_PEAK(xfer);
-    AUDIO_PEAK(post_fx); AUDIO_PEAK(tail); AUDIO_PEAK(other);
+    AUDIO_PEAK(wall); AUDIO_PEAK(irq); AUDIO_PEAK(c0); AUDIO_PEAK(wait); AUDIO_PEAK(c1); AUDIO_PEAK(c1_fm); AUDIO_PEAK(t5);
+    AUDIO_PEAK(t5_input); AUDIO_PEAK(t5_uac);
+    AUDIO_PEAK(pre); AUDIO_PEAK(midi); AUDIO_PEAK(midi_events);
+    AUDIO_PEAK(rdx_ctl); AUDIO_PEAK(c0_fm); AUDIO_PEAK(xfer);
+    AUDIO_PEAK(rdx_fx); AUDIO_PEAK(mix); AUDIO_PEAK(post_fx); AUDIO_PEAK(tail); AUDIO_PEAK(other);
+    AUDIO_PEAK(hall3); AUDIO_PEAK(chorus2);
 #undef AUDIO_PEAK
     if (late) {
-#define AUDIO_LATE_FIELD(field) audio_timing.late.field = s.field
-        AUDIO_LATE_FIELD(wall); AUDIO_LATE_FIELD(irq); AUDIO_LATE_FIELD(c0); AUDIO_LATE_FIELD(wait);
-        AUDIO_LATE_FIELD(c1); AUDIO_LATE_FIELD(t5); AUDIO_LATE_FIELD(pre); AUDIO_LATE_FIELD(rdx_ctl);
-        AUDIO_LATE_FIELD(c0_fm); AUDIO_LATE_FIELD(xfer); AUDIO_LATE_FIELD(post_fx);
-        AUDIO_LATE_FIELD(tail); AUDIO_LATE_FIELD(other);
-#undef AUDIO_LATE_FIELD
-        audio_timing.late_source = source;
+        uint32_t seq = audio_timing.late_seq + 1u, slot = (seq - 1u) & (AUDIO_LATE_HISTORY - 1u);
+        uint32_t gap = audio_last_late_half ? audio_halves - audio_last_late_half : 0u;
+        volatile audio_late_record_t *r = &audio_timing.late[slot];
+        audio_late_burst = (audio_last_late_half && gap <= 4u) ? (uint16_t)(audio_late_burst + 1u) : 1u;
+        audio_last_late_half = audio_halves;
+        r->timing = s;
+        r->count = audio_late_notice + 1u;
+        r->gap = gap;
+        r->burst = audio_late_burst;
+        r->source = source;
+        RING_PUBLISH();                                /* record contents before making the slot visible */
+        audio_timing.late_seq = seq;
     }
+}
+
+/* Main/UI-side stable copy of one recent late half. back=0 is newest. */
+static int audio_late_snapshot(uint32_t back, audio_late_record_t *out, uint32_t *available)
+{
+    uint32_t a, b, n, slot;
+    do {
+        a = audio_timing.late_seq;
+        if (!a) {
+            *available = 0;
+            return 0;
+        }
+        n = a < AUDIO_LATE_HISTORY ? a : AUDIO_LATE_HISTORY;
+        if (back >= n)
+            back = n - 1u;
+        slot = (a - 1u - back) & (AUDIO_LATE_HISTORY - 1u);
+        *out = audio_timing.late[slot];
+        RING_PUBLISH();
+        b = audio_timing.late_seq;
+    } while (a != b);
+    *available = n;
+    return 1;
 }
 
 static void shed_voice(int hard)
@@ -206,6 +246,12 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
         uint32_t half = fm1_audio_free_half(), b, us, total_us, all_ticks, nested_ticks;
         uint8_t late, source = 0;
         int32_t *o = &abuf[half * HALF_WORDS];
+        /* Consume the interrupt that brought us here before rendering.  If
+         * DMA crosses the next half-buffer boundary while this block is still
+         * being produced, the hardware can latch a fresh pending interrupt.
+         * Acknowledging only at the end used to clear that new event too,
+         * delaying recovery by one complete 128-frame period after a miss. */
+        fm1_audio_ack_half();
         memset(&audio_timing.cur, 0, sizeof audio_timing.cur);
         /* Measure only this half's excess start-to-start interval.  The old
          * absolute schedule accumulated a tiny sample-clock mismatch forever
@@ -247,7 +293,6 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
         rdx_perf_half_end();
         rdx_fx_perf_half_end();
 #endif
-        fm1_audio_ack_half();
         audio_halves++;
         total_us = shed_check(all_ticks);
 #if FELUCCA_CPU2
@@ -278,12 +323,15 @@ void fm1_alnk0_irq(void)                       /* via isr_alnk0 (hal/fm1_isr.S) 
 #endif
         if (late) {
             source = audio_late_cause(all_ticks);
-            audio_late_source = source;                /* publish cause before publishing its count */
             felucca_dbg.late++;                         /* the DMA moved on while we rendered */
-            audio_late_notice++;
             shed_req |= 2u;                             /* next half may fade one held voice */
         }
         audio_timing_publish(all_ticks, nested_ticks, late, source);
+        if (late) {
+            audio_late_source = source;
+            RING_PUBLISH();                            /* source and timing record before the visible count */
+            audio_late_notice++;
+        }
         felucca_dbg.halves++;
         felucca_dbg.last_us = total_us;                  /* deadline wall time, for console diagnostics */
         if (total_us > felucca_dbg.max_us)
@@ -298,6 +346,8 @@ static void audio_init(void)                   /* codec and ALNK0 bring-up (fm1_
 {
     uint32_t i;
     audio_last_half_tick = 0;
+    audio_last_late_half = 0;
+    audio_late_burst = 0;
     for (i = 0; i < 2u * HALF_WORDS; i++)
         abuf[i] = 0;
     fm1_audio_init(abuf, HALF_WORDS, isr_alnk0, 3);

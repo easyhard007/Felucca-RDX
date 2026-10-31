@@ -996,9 +996,12 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
     }
 #if FELUCCA_RDX
     if (t->engine == ENGI_RDX) {
+        AUDIO_TIME_START(t_native_fx);
         rdx_fx_chain(t, b, n, nr);                      /* both native effect slots, strictly in patch order */
         rdx_gain_apply(t, b, n);                        /* calibrated final RDX level, before track level/pan */
+        AUDIO_TIME_ADD(rdx_fx, t_native_fx);
     }
+    AUDIO_TIME_START(t_part_mix);
 #endif
     if (T_SPREAD(t))
         mix_spread(t, b, n SM_ARG(sm));
@@ -1056,6 +1059,10 @@ static void mix_part(track_t *t, uint32_t n SM_DECL)
         perf_throw(t, b, SM(d), SM(v), n);              /* perform.c: REV / ECHO THROW (1.5.1), the sends towards full */
     if (MOD(t).on)
         mod_end(t);                                     /* the stored values back */
+#if FELUCCA_RDX
+    if (t->engine == ENGI_RDX)
+        AUDIO_TIME_ADD(mix, t_part_mix);                /* slicer, stereo side reconstruction, level and pan */
+#endif
 }
 
 #if FELUCCA_RDX

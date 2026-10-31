@@ -65,6 +65,14 @@ typedef struct {
 
 static rdx_fx_track_t rdx_fx[NTRK] __attribute__((section(".pool")));
 static uint8_t rfx_delay_owner = 0xFFu;       /* full-rate dly_buf owner: track * 2 + slot */
+/* Large delay stores must never be memset from the 2.9 ms audio deadline.
+ * The ISR only sets one of these bits and bypasses that wet engine until the
+ * main loop has cleared it.  Bits 0..1: native ROOM/SPRING, 2..3: HALL,
+ * 4..5: JIANT Chorus, one bit per physical Reface slot. */
+static volatile uint8_t rfx_clear_pending;
+#define RFX_CLEAR_NATIVE(S) (1u << ((S) & 1u))
+#define RFX_CLEAR_HALL(S) (1u << (2u + ((S) & 1u)))
+#define RFX_CLEAR_CHORUS(S) (1u << (4u + ((S) & 1u)))
 static struct {
     int32_t l[CTL], r[CTL], in[CTL], wet[CTL], side[CTL];
 } rfx_work __attribute__((section(".pool")));
@@ -177,6 +185,45 @@ static void rfx_native_reverb_clear(uint32_t slot)
     int16_t *ap = slot ? rdx_rev_u2.ap : rev_ap;
     memset(comb, 0, REV_COMB_LEN * sizeof *comb);
     memset(ap, 0, REV_AP_LEN * sizeof *ap);
+}
+
+static uint32_t rfx_reverb_clear_bit(uint32_t slot, uint32_t model)
+{
+    return model >= 2u ? RFX_CLEAR_HALL(slot) : RFX_CLEAR_NATIVE(slot);
+}
+
+static void rfx_reverb_clear_later(uint32_t slot, uint32_t model)
+{
+    rfx_clear_pending |= (uint8_t)rfx_reverb_clear_bit(slot, model);
+}
+
+/* Main-loop maintenance.  Clear at most one store per call so browsing does
+ * not stall the UI for several milliseconds when both slots change together.
+ * An audio interrupt may pre-empt this memset; its pending bit remains set,
+ * so that engine is bypassed and cannot read a half-cleared delay line. */
+static void rdx_fx_maintenance(void)
+{
+    uint32_t slot, bit;
+    for (slot = 0; slot < 2u; slot++) {
+        bit = RFX_CLEAR_HALL(slot);
+        if (rfx_clear_pending & bit) {
+            rdx_clouds_clear(slot);
+            rfx_clear_pending &= (uint8_t)~bit;
+            return;
+        }
+        bit = RFX_CLEAR_NATIVE(slot);
+        if (rfx_clear_pending & bit) {
+            rfx_native_reverb_clear(slot);
+            rfx_clear_pending &= (uint8_t)~bit;
+            return;
+        }
+        bit = RFX_CLEAR_CHORUS(slot);
+        if (rfx_clear_pending & bit) {
+            memset(&rfx_chorus2[slot], 0, sizeof rfx_chorus2[slot]);
+            rfx_clear_pending &= (uint8_t)~bit;
+            return;
+        }
+    }
 }
 
 /* PicoFaceDX's one-pole TONE coefficient, Q16.  Its cutoff is linear from
@@ -513,7 +560,7 @@ static __attribute__((noinline)) void rfx_reverb_serial(rdx_fx_slot_t *s, uint32
     uint32_t i, value = s->send;
     int32_t send, xmax, size = (int32_t)rfx_reverb_size(s->p3), damp = s->p4;
     int32_t amount;
-    if (!value)
+    if (!value || (rfx_clear_pending & rfx_reverb_clear_bit(slot, s->p1)))
         return;
     send = (int32_t)value * 258;                       /* Felucca send 0 .. 42, Q15 */
     xmax = 0x7FFFFFFF / send;
@@ -756,18 +803,20 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         rdx_fx_slot_t *s = &f->slot[k];
         uint32_t old_reverb = s->valid && s->type == RFX_REVERB;
         uint32_t old_chorus = s->valid && s->type == RFX_CHORUS;
+        uint32_t old_reverb_model = s->p1;
         uint32_t model = ty == RFX_PHASER ? rdx_phaser_model_get() :
                          ty == RFX_FLANGER ? rdx_flanger_model_get() : 0u;
         uint32_t changed;
         if (ty == RFX_REVERB && p1 > 2u)
             p1 = 2u;                                   /* invalid future/corrupt model -> HALL */
         changed = rfx_slot_set(s, ty, send, p1, p2, p3, p4, model);
-        if (changed && (old_reverb || ty == RFX_REVERB)) {
-            rfx_native_reverb_clear(k);                 /* ROOM / SPRING share these physical lines */
-            rdx_clouds_clear(k);                        /* HALL owns a separate tail per physical slot */
-        }
-        if (changed && (old_chorus || ty == RFX_CHORUS))
-            memset(&rfx_chorus2[si % RFX_NSLOT], 0, sizeof rfx_chorus2[0]);
+        /* Same-model Reverb parameter changes deliberately preserve and morph
+         * the existing tail.  Leaving a model schedules only that model's
+         * store; the new model was cleared when it was last left. */
+        if (changed && old_reverb && (ty != RFX_REVERB || old_reverb_model != p1))
+            rfx_reverb_clear_later(k, old_reverb_model);
+        if (changed && old_chorus && ty != RFX_CHORUS)
+            rfx_clear_pending |= (uint8_t)RFX_CLEAR_CHORUS(si);
         if (!send || ty == RFX_THRU)
             continue;
         if (ty >= RFX_DIST && ty <= RFX_PHASER && ty != RFX_CHORUS) {
@@ -787,6 +836,8 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
             rfx_wah(s, rfx_work.r, n, rdx_touch_wah_get(t), 1u);
             break;
         case RFX_CHORUS:
+            if (rfx_clear_pending & RFX_CLEAR_CHORUS(si))
+                break;
 #if RDX_FX_PERF_TIMER
             {
                 uint32_t fx_t0 = fm1_ticks();
@@ -841,12 +892,11 @@ static __attribute__((noinline)) void rdx_fx_chain(track_t *t, int32_t *b,
         rfx_work.side[k] = (rfx_work.l[k] >> 1) - (rfx_work.r[k] >> 1);
     }
     if (!voices && f->tail && !--f->tail) {
-        /* Do not leave the Q14 tank's final quantised state parked until the
-         * next note. */
+        /* Do not leave an old tank parked until the next note, but keep the
+         * tens-of-kilobytes memset out of this audio half. */
         for (k = 0; k < 2u; k++)
-            if (f->slot[k].valid && f->slot[k].type == RFX_REVERB && f->slot[k].p1 >= 2u) {
-                rdx_clouds_clear(k);
-            }
+            if (f->slot[k].valid && f->slot[k].type == RFX_REVERB)
+                rfx_reverb_clear_later(k, f->slot[k].p1);
     }
 }
 

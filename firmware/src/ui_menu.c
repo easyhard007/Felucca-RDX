@@ -364,7 +364,7 @@ static void menu_row(uint32_t k, uint32_t row)
  * follow every INFO_CPU_MS. */
 #define INFO_Y 32
 #if FELUCCA_RDX
-#define INFO_N 29u
+#define INFO_N 41u
 #else
 #define INFO_N 6u
 #endif
@@ -380,7 +380,9 @@ static struct {
     uint8_t chorus2_valid;
     uint16_t wall_peak, irq_peak, wait_peak;
     uint32_t late_count;
-    uint8_t late_source;
+    uint32_t late_record_count, late_gap;
+    uint16_t late_burst;
+    uint8_t late_source, late_back, late_avail;
     audio_timing_sample_t late;
 #endif
     uint32_t t;
@@ -409,14 +411,27 @@ static uint32_t info_sig(void)
         info.wall_peak = (uint16_t)clamp((int32_t)audio_timing.peak.wall, 0, 65535);
         info.irq_peak = (uint16_t)clamp((int32_t)audio_timing.peak.irq, 0, 65535);
         info.wait_peak = (uint16_t)clamp((int32_t)audio_timing.peak.wait, 0, 65535);
-        info.late_count = audio_late_notice;
-        info.late_source = audio_timing.late_source;
-#define INFO_LATE_COPY(field) info.late.field = audio_timing.late.field
-        INFO_LATE_COPY(wall); INFO_LATE_COPY(irq); INFO_LATE_COPY(c0); INFO_LATE_COPY(wait);
-        INFO_LATE_COPY(c1); INFO_LATE_COPY(t5); INFO_LATE_COPY(pre); INFO_LATE_COPY(rdx_ctl);
-        INFO_LATE_COPY(c0_fm); INFO_LATE_COPY(xfer); INFO_LATE_COPY(post_fx);
-        INFO_LATE_COPY(tail); INFO_LATE_COPY(other);
-#undef INFO_LATE_COPY
+        {
+            audio_late_record_t r;
+            uint32_t available = 0, count = audio_late_notice;
+            if (count != info.late_count)
+                info.late_back = 0;                    /* a new miss: show it first */
+            info.late_count = count;
+            if (audio_late_snapshot(info.late_back, &r, &available)) {
+                if (info.late_back >= available)
+                    info.late_back = (uint8_t)(available - 1u);
+                info.late = r.timing;
+                info.late_record_count = r.count;
+                info.late_gap = r.gap;
+                info.late_burst = r.burst;
+                info.late_source = r.source;
+                info.late_avail = (uint8_t)available;
+            } else {
+                memset(&info.late, 0, sizeof info.late);
+                info.late_record_count = info.late_gap = 0;
+                info.late_burst = info.late_source = info.late_avail = 0;
+            }
+        }
 #endif
 #if FELUCCA_CPU2
         if (fm1_c1_on) {
@@ -435,10 +450,15 @@ static uint32_t info_sig(void)
            info.hall_avg * 109u + info.hall_peak * 241u + info.hall_valid * 251u +
            info.chorus2_avg * 271u + info.chorus2_peak * 277u + info.chorus2_valid * 281u +
            info.wall_peak * 127u + info.irq_peak * 137u + info.wait_peak * 149u +
-           info.late_count * 157u + info.late_source * 163u + info.late.wall * 167u + info.late.irq * 173u +
-           info.late.c0 * 179u + info.late.wait * 181u + info.late.c1 * 191u + info.late.t5 * 193u +
-           info.late.pre * 197u + info.late.rdx_ctl * 199u + info.late.c0_fm * 211u + info.late.xfer * 223u +
-           info.late.post_fx * 227u + info.late.tail * 229u + info.late.other * 233u +
+           info.late_count * 157u + info.late_record_count * 159u + info.late_back * 161u +
+           info.late_source * 163u + info.late_gap * 165u + info.late_burst * 166u +
+           info.late.wall * 167u + info.late.irq * 173u + info.late.c0 * 179u +
+           info.late.wait * 181u + info.late.c1 * 191u + info.late.c1_fm * 192u + info.late.t5 * 193u +
+           info.late.t5_input * 194u + info.late.t5_uac * 195u +
+           info.late.pre * 197u + info.late.midi * 198u + info.late.midi_events * 196u +
+           info.late.rdx_ctl * 199u + info.late.c0_fm * 211u + info.late.xfer * 223u +
+           info.late.rdx_fx * 225u + info.late.hall3 * 226u + info.late.chorus2 * 227u +
+           info.late.mix * 228u + info.late.post_fx * 229u + info.late.tail * 231u + info.late.other * 233u +
 #endif
            1u;
 }
@@ -458,8 +478,9 @@ static void info_rows(void)                            /* (in screen rows: cv_oy
         "RDX AVG", "RDX PEAK", "RDX VOICES", "HALL3 AVG", "HALL3 PEAK",
         "CHOR2 AVG", "CHOR2 PEAK",
         "CORE 0", "C0 PEAK", "CORE 1", "C1 PEAK", "WALL MAX", "IRQ MAX", "WAIT MAX", "LATE COUNT", "LATE SOURCE",
-        "L WALL", "L IRQ", "L C0 BUSY", "L C1 WAIT", "L C1 WORK", "L T5 IRQ",
-        "L PRE", "L RDX CTL", "L C0 FM", "L XFER", "L POST FX", "L TAIL", "L OTHER"
+        "L REC", "L GAP", "L BURST", "L WALL", "L IRQ", "L C0 BUSY", "L C1 WAIT", "L C1 WORK", "L C1 FM",
+        "L T5 IRQ", "L T5 INPUT", "L T5 UAC", "L PRE", "L MIDI", "L MIDI MSG", "L RDX CTL", "L C0 FM",
+        "L XFER", "L RDX FX", "L HALL3", "L CHOR2", "L MIX", "L MASTER", "L TAIL", "L OTHER"
     };
     int32_t h = INFO_ROW_H, scroll = ui.menu_scroll;
 #else
@@ -499,19 +520,30 @@ static void info_rows(void)                            /* (in screen rows: cv_oy
             case 12: v = info.irq_peak; break;
             case 13: v = info.wait_peak; break;
             case 14: v = info.late_count; unit = 0; break;
-            case 16: v = info.late.wall; valid = info.late_count != 0u; break;
-            case 17: v = info.late.irq; valid = info.late_count != 0u; break;
-            case 18: v = info.late.c0; valid = info.late_count != 0u; break;
-            case 19: v = info.late.wait; valid = info.late_count != 0u; break;
-            case 20: v = info.late.c1; valid = info.late_count != 0u; break;
-            case 21: v = info.late.t5; valid = info.late_count != 0u; break;
-            case 22: v = info.late.pre; valid = info.late_count != 0u; break;
-            case 23: v = info.late.rdx_ctl; valid = info.late_count != 0u; break;
-            case 24: v = info.late.c0_fm; valid = info.late_count != 0u; break;
-            case 25: v = info.late.xfer; valid = info.late_count != 0u; break;
-            case 26: v = info.late.post_fx; valid = info.late_count != 0u; break;
-            case 27: v = info.late.tail; valid = info.late_count != 0u; break;
-            case 28: v = info.late.other; valid = info.late_count != 0u; break;
+            case 17: v = info.late_gap; unit = 0; valid = info.late_record_count != 0u; break;
+            case 18: v = info.late_burst; unit = 0; valid = info.late_record_count != 0u; break;
+            case 19: v = info.late.wall; valid = info.late_record_count != 0u; break;
+            case 20: v = info.late.irq; valid = info.late_record_count != 0u; break;
+            case 21: v = info.late.c0; valid = info.late_record_count != 0u; break;
+            case 22: v = info.late.wait; valid = info.late_record_count != 0u; break;
+            case 23: v = info.late.c1; valid = info.late_record_count != 0u; break;
+            case 24: v = info.late.c1_fm; valid = info.late_record_count != 0u; break;
+            case 25: v = info.late.t5; valid = info.late_record_count != 0u; break;
+            case 26: v = info.late.t5_input; valid = info.late_record_count != 0u; break;
+            case 27: v = info.late.t5_uac; valid = info.late_record_count != 0u; break;
+            case 28: v = info.late.pre; valid = info.late_record_count != 0u; break;
+            case 29: v = info.late.midi; valid = info.late_record_count != 0u; break;
+            case 30: v = info.late.midi_events; unit = 0; valid = info.late_record_count != 0u; break;
+            case 31: v = info.late.rdx_ctl; valid = info.late_record_count != 0u; break;
+            case 32: v = info.late.c0_fm; valid = info.late_record_count != 0u; break;
+            case 33: v = info.late.xfer; valid = info.late_record_count != 0u; break;
+            case 34: v = info.late.rdx_fx; valid = info.late_record_count != 0u; break;
+            case 35: v = info.late.hall3; valid = info.late_record_count != 0u; break;
+            case 36: v = info.late.chorus2; valid = info.late_record_count != 0u; break;
+            case 37: v = info.late.mix; valid = info.late_record_count != 0u; break;
+            case 38: v = info.late.post_fx; valid = info.late_record_count != 0u; break;
+            case 39: v = info.late.tail; valid = info.late_record_count != 0u; break;
+            case 40: v = info.late.other; valid = info.late_record_count != 0u; break;
             default: unit = 0; break;
             }
             if (k == 15u) {
@@ -519,6 +551,21 @@ static void info_rows(void)                            /* (in screen rows: cv_oy
                                   info.late_source == AUDIO_LATE_C0 ? "CORE0" :
                                   info.late_source == AUDIO_LATE_C1 ? "CORE1" : "SYNC";
                 cv_text_r(MR_VR, vy, &AF_M, info.late_count ? src : "--", T_THEME, T_SURF);
+            } else if (k == 16u) {
+                if (!info.late_record_count)
+                    cv_text_r(MR_VR, vy, &AF_M, "--", T_THEME, T_SURF);
+                else {
+                    uint32_t p;
+                    b[0] = '#';
+                    fmt_int(b + 1, (int32_t)info.late_record_count);
+                    p = str_len(b);
+                    b[p++] = ' ';
+                    b[p++] = (char)('1' + info.late_back);
+                    b[p++] = '/';
+                    b[p++] = (char)('0' + info.late_avail);
+                    b[p] = 0;
+                    cv_text_r(MR_VR, vy, &AF_M, b, T_THEME, T_SURF);
+                }
             } else if (!valid)
                 cv_text_r(MR_VR, vy, &AF_M, k == 9u || k == 10u ? "OFF" : "--", T_THEME, T_SURF);
             else {
@@ -696,6 +743,15 @@ static void menu_input(uint32_t oct)                  /* oct: ui_input.c oct_tap
         else if (ui.menu == 3 && (s = panel_enc(EN_PRESET)) != 0)
             ui.menu_scroll = (uint16_t)clamp((int32_t)ui.menu_scroll + clamp(s, -128, 128) * (INFO_ROW_H + 2),
                                              0, info_scroll_max());
+        else if (ui.menu == 3 && (s = panel_enc(EN_ALGO)) != 0) {
+            uint32_t available = audio_timing.late_seq < AUDIO_LATE_HISTORY ?
+                                 audio_timing.late_seq : AUDIO_LATE_HISTORY;
+            if (available) {
+                info.late_back = (uint8_t)clamp((int32_t)info.late_back + (s > 0 ? 1 : -1), 0, (int32_t)available - 1);
+                info.t = fm1_ms - INFO_CPU_MS;
+                ui.force = 1;
+            }
+        }
 #endif
         enc_drop();
         return;

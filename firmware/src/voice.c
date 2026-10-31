@@ -19,15 +19,27 @@ static uint32_t vage;                                   /* voice ages: one clock
  * Keep the type available in host builds so the real INFO page can be tested;
  * the phase probes themselves compile only when the hardware clock exists. */
 typedef struct {
-    uint32_t wall, irq, c0, wait, c1, t5;
-    uint32_t pre, rdx_ctl, c0_fm, xfer, post_fx, tail, other;
+    uint32_t wall, irq, c0, wait, c1, c1_fm, t5, t5_input, t5_uac;
+    uint32_t pre, midi, midi_events, rdx_ctl, c0_fm, xfer, rdx_fx, mix, post_fx, tail, other;
+    uint32_t hall3, chorus2;
 } audio_timing_sample_t;
+#define AUDIO_LATE_HISTORY 4u
+typedef struct {
+    audio_timing_sample_t timing;
+    uint32_t count, gap;
+    uint16_t burst;
+    uint8_t source;
+} audio_late_record_t;
 static struct {
     audio_timing_sample_t cur;
     volatile audio_timing_sample_t peak;
-    volatile audio_timing_sample_t late;
-    volatile uint8_t late_source;
+    volatile audio_late_record_t late[AUDIO_LATE_HISTORY];
+    volatile uint32_t late_seq;
 } audio_timing;
+/* Declared before seq.c so its MIDI subsection can subtract any higher-priority
+ * TIMER5 time that occurred while the queue was being drained.  audio.c resets
+ * it at the start of every half; main.c accumulates nested TIMER5 work. */
+static volatile uint32_t t5_nested_ticks;
 
 /* Pure RDX voice-render work in the current audio half.  Core0 and Core1
  * write separate counters, then fx.c combines them into a per-voice time. */
@@ -564,6 +576,40 @@ static void trk_note_off(track_t *t, uint32_t note)
         }
 }
 
+/* Release a set of notes together.  Sustain-pedal up can otherwise call the
+ * single-note path up to 128 times in one audio half, repeatedly walking all
+ * voices.  MONO keeps the ordered single-note path because each release may
+ * choose a different held-note fallback; POLY can filter pending notes and
+ * lower every matching gate in one pass without changing the musical result. */
+static void trk_notes_off(track_t *t, const uint32_t notes[4])
+{
+    uint32_t i, k = 0, note;
+    if (trk_vmode(t) != V_POLY) {
+        for (note = 0; note < 128u; note++)
+            if (notes[note >> 5] & (1u << (note & 31u)))
+                trk_note_off(t, note);
+        return;
+    }
+    for (i = 0; i < t->xp_n; i++) {                    /* queued during an engine crossfade */
+        note = t->xp_note[i];
+        if (!(notes[note >> 5] & (1u << (note & 31u)))) {
+            t->xp_note[k] = t->xp_note[i];
+            t->xp_vel[k++] = t->xp_vel[i];
+        }
+    }
+    t->xp_n = (uint8_t)k;
+    for (note = 0; note < 128u; note++)
+        if (notes[note >> 5] & (1u << (note & 31u)))
+            mono_remove(t, note);                       /* clear any stale stack after a mode change */
+    for (i = 0; i < NVOICE; i++) {
+        note = t->v[i].note;
+        if (t->v[i].gate && (notes[note >> 5] & (1u << (note & 31u)))) {
+            t->v[i].gate = 0;
+            t->v[i].stage = 3;
+        }
+    }
+}
+
 static void trk_all_off(track_t *t)
 {
     uint32_t i;
@@ -831,8 +877,14 @@ typedef struct {
 static rdx_c1_voice_job_t rdx_c1_voice_job;
 static int32_t rdx_c1_voice_out[CTL], rdx_c1_voice_spread[CTL];
 /* Only Core1's assigned voices are saved, before publishing its job. If it
- * stalls midway through a sample, recovery must restart at the block boundary. */
-static rdx_note_t rdx_c1_before[5u];
+ * stalls midway through a sample, recovery must restart at the block boundary.
+ * Patch bytes and prepared constants are immutable during render, so copying
+ * them on every audio half only wastes Core0's deadline. */
+typedef union {
+    uint32_t align;
+    uint8_t bytes[RDX_NOTE_RUNTIME_SIZE];
+} rdx_runtime_snapshot_t;
+static rdx_runtime_snapshot_t rdx_c1_before[5u];
 
 /* Keep Core0 below the measured AC79 bottleneck.  It still prepares every
  * voice, mixes the returned samples and runs the effects, so an even voice
@@ -911,7 +963,7 @@ static void rdx_render_parallel(track_t *t, const engine_t *e, int32_t *out, uin
     rdx_c1_voice_job.spread = (uint8_t)!!T_SPREAD(t);
     for (i = 0; i < NVOICE; i++)
         if ((c1mask >> i) & 1u)
-            rdx_c1_before[saved++] = *rdx_note(t, &t->v[i]);
+            memcpy(rdx_c1_before[saved++].bytes, rdx_note(t, &t->v[i]), RDX_NOTE_RUNTIME_SIZE);
     handed = c1mask && C1_ON() && C1_RUN(rdx_c1_voices, 0);
     if (!handed)
         c1mask = 0;
@@ -940,7 +992,8 @@ static void rdx_render_parallel(track_t *t, const engine_t *e, int32_t *out, uin
             saved = 0;
             for (i = 0; i < NVOICE; i++)
                 if ((c1mask >> i) & 1u)
-                    *rdx_note(t, &t->v[i]) = rdx_c1_before[saved++];
+                    memcpy(rdx_note(t, &t->v[i]), rdx_c1_before[saved++].bytes,
+                           RDX_NOTE_RUNTIME_SIZE);
             AUDIO_TIME_START(t_recover);
             calls = 0;
             for (i = 0; i < NVOICE; i++)
@@ -985,6 +1038,9 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
     int32_t tune_fine = (song.g[G_TUNE] * 16 - tune * 100) * 2367 / 16000;   /* rest, in 1/4096 (1 ct = 2.367) */
     int32_t bend, bend16, bend_fine;
     uint32_t ti = (uint32_t)(t - trk);
+#if FELUCCA_RDX && FELUCCA_CPU2
+    AUDIO_TIME_START(t_rdx_ctl);
+#endif
     if (ENGINES[eng_idx(t->eng_req)] == &ENG_DRUM) {
         midi_bend_q8[ti] = midi_bend_target[ti] = 0;
     } else {
@@ -1027,13 +1083,15 @@ static uint32_t track_render(track_t *t, int32_t *out, uint32_t n)
 #if FELUCCA_RDX && FELUCCA_CPU2
     if (e == &ENG_RDX && !c1_inside_part_job && !c1_outer_active) {
         uint32_t valid = 0;
-        AUDIO_TIME_START(t_ctl);
         for (i = 0; i < NVOICE; i++)
             if (voice_render_prepare(t, &t->v[i], &ctl, &rdx_c1_voice_job.mod[i])) {
                 valid |= 1u << i;
                 nr++;
             }
-        AUDIO_TIME_ADD(rdx_ctl, t_ctl);
+        /* Complete Core0 RDX setup, including LFO/envelope block control and
+         * per-voice modulation preparation.  The old probe measured only the
+         * last loop, leaving a large and misleading OTHER remainder. */
+        AUDIO_TIME_ADD(rdx_ctl, t_rdx_ctl);
         if (C1_ON())
             rdx_render_parallel(t, e, out, n, valid, nr);
         else

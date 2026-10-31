@@ -199,11 +199,60 @@ static void midi_note_event(uint32_t ch, uint32_t note, uint32_t vel)
 
 static void midi_pedal_up(uint32_t ch)
 {
-    uint32_t note;
-    midi_channel(ch)->pedal = 0;
-    for (note = 0; note < 128u; note++)
-        if (midi_notes[ch][note] & MIDI_PEDAL_NOTE)
-            midi_release(ch, note);
+    midi_channel_t *c = midi_channel(ch);
+    uint32_t candidates[NTRK][4] = {{0}}, local[NTRK][4] = {{0}}, release[NTRK][4] = {{0}};
+    uint32_t note, track, k, i;
+    c->pedal = 0;
+
+    /* First detach every source note on this pedal.  Chords contribute the
+     * exact generated notes they started.  Doing all sources first is
+     * important: a tone shared by two sustained chords must be released only
+     * after neither chord owns it. */
+    for (note = 0; note < 128u; note++) {
+        uint32_t id = midi_notes[ch][note] & 0x7Fu;
+        mchord_t *m;
+        if (!(midi_notes[ch][note] & MIDI_PEDAL_NOTE) || !id)
+            continue;
+        track = id - 1u;
+        m = mchord_of(ch, note, id);
+        midi_notes[ch][note] = 0;
+        midi_owners[track]--;
+        c->owned[track]--;
+        if (m) {
+            for (i = 0; i < m->n; i++)
+                candidates[track][m->note[i] >> 5] |= 1u << (m->note[i] & 31u);
+            m->id = 0;
+        } else {
+            candidates[track][note >> 5] |= 1u << (note & 31u);
+        }
+    }
+    for (track = 0; track < NTRK; track++)
+        if (!c->owned[track])
+            c->targets &= (uint8_t)~(1u << track);
+
+    /* Build the FM-1 keyboard's held-note set once.  The old path performed
+     * this 27-key/chord scan again for every sustained note. */
+    for (k = 0; k < 27u; k++) {
+        track = kb_trk[k];
+        if (track >= NTRK)
+            continue;
+        for (i = 0; i < kb_chn[k]; i++) {
+            note = kb_chord[k][i];
+            local[track][note >> 5] |= 1u << (note & 31u);
+        }
+    }
+
+    /* Other MIDI channels or chords may still own a candidate.  Test each
+     * unique tone once, then release all eligible POLY voices in one pass. */
+    for (track = 0; track < NTRK; track++) {
+        for (note = 0; note < 128u; note++)
+            if ((candidates[track][note >> 5] & (1u << (note & 31u))) &&
+                !(local[track][note >> 5] & (1u << (note & 31u))) &&
+                !midi_note_held(&trk[track], note))
+                release[track][note >> 5] |= 1u << (note & 31u);
+        if (release[track][0] | release[track][1] | release[track][2] | release[track][3])
+            input_off_batch(&trk[track], release[track]);
+    }
 }
 
 /* Preset/project panic and CC120 must discard ownership so a later pedal-up

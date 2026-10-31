@@ -522,10 +522,13 @@ static void fm1_led_anim_stop(void) { fm1__an_f = 0; }   /* (the LEDs as the las
 static void fm1_input_tick(void)
 {
     uint32_t p = fm1__tick_col, n = p + 1u == FM1_NCOL ? 0u : p + 1u;
+#if !FELUCCA_RDX
     uint32_t t0 = fm1_ticks(), g = t0 - fm1_in_stat.last, b = 0;
+#endif
     uint32_t w = 0xFFFFu ^ (1u << n) ^ (n < 2u ? 1u << (11u + n) : 0u), lit, dim = 0, k = fm1__dim_k;
     uint32_t br = 0, kb = 0;
     fm1__led_lines(0);
+#if !FELUCCA_RDX
     fm1_in_stat.last = t0;
     while (b < FM1_GAP_BINS - 1u && g >= (150u * FM1_TICKS_PER_US << b))
         b++;
@@ -535,6 +538,7 @@ static void fm1_input_tick(void)
     fm1_in_stat.on[p] += g;
     if (g > fm1_in_stat.on_max[p])
         fm1_in_stat.on_max[p] = g;
+#endif
     fm1_in.raw[p] = (uint8_t)fm1__rows();          /* column p has been latched one tick (the lines dark) */
     if (p == 0u)
         fm1__breath_frame();
@@ -567,8 +571,10 @@ static void fm1_input_tick(void)
             d = fm1_ticks() - t1;
         fm1__led_lines(0);
         fm1__dim_k = (uint8_t)(d > T ? (k ? k - 1u : 0u) : d < T && k < 16u ? k + 1u : k);
+#if !FELUCCA_RDX
         fm1_in_stat.dim_n++;
         fm1_in_stat.dim_sum += d;
+#endif
     } else {
         k = 0;
     }
@@ -584,11 +590,13 @@ static void fm1_input_tick(void)
         if (fm1__an_f)                             /* the power-on sweep: the next frame's picture */
             fm1__anim_frame();
     }
+#if !FELUCCA_RDX
     g = fm1_ticks() - t0;
     fm1_in_stat.cost_sum += g;
     fm1_in_stat.ticks++;
     if (g > fm1_in_stat.cost_max)
         fm1_in_stat.cost_max = g;
+#endif
 }
 
 /* main-loop critical section against fm1_input_tick (main loop only: it

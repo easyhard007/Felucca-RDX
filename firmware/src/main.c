@@ -10,7 +10,9 @@ extern uint32_t _c1_start[], _c1_end[], _c1_load[];
 #endif
 
 
-/* TIMER5 outranks ALNK0, so the scan keeps its 100 us pace while a half buffer renders: before,
+/* TIMER5 outranks ALNK0.  Its 10 kHz clock keeps USB/UART service and the millisecond timebase unchanged;
+ * the RDX panel matrix advances every other tick (5 kHz, 455 complete 11-column frames/s) to leave the
+ * audio deadline about 0.1 ms more headroom.  Before nesting, the scan stopped for the whole render:
  * the ticks stopped for the whole render (0.7 ms idle, several ms loaded), the column lit when it
  * began stayed lit that long (a ~16 Hz flicker over all LEDs, beating with the scan) and the
  * encoders lost frames. Nested in ALNK0 it only scans (GPIO + fm1_in, nothing the audio ISR touches)
@@ -22,10 +24,16 @@ extern uint32_t _c1_start[], _c1_end[], _c1_load[];
 void fm1_timer5_irq(void)
 {
     static uint32_t sub, owed;
-    uint32_t t0 = fm1_ticks(), usb_due = sub % 5u == 0u;
+    static uint8_t scan_phase;
+    uint32_t t0 = fm1_ticks(), usb_due = sub % 5u == 0u, ti, input_ticks = 0, uac_ticks = 0;
     fm1_timer5_ack();
     felucca_dbg.timer_irqs++;
-    fm1_input_tick();
+    scan_phase ^= 1u;
+    if (scan_phase) {
+        ti = fm1_ticks();
+        fm1_input_tick();
+        input_ticks = fm1_ticks() - ti;
+    }
     {   /* milliseconds from the 24 MHz TIMER4 (robust to a late tick) */
         static uint32_t last, acc;
         acc += t0 - last;
@@ -45,10 +53,15 @@ void fm1_timer5_irq(void)
         sub = 0;
     if (felucca_dbg.in_audio) {
         felucca_dbg.nested++;
+        audio_timing.cur.t5_input += input_ticks;
 #if FELUCCA_UAC
-        if (usb_due)
+        if (usb_due) {
+            ti = fm1_ticks();
             uac_service();
+            uac_ticks = fm1_ticks() - ti;
+        }
 #endif
+        audio_timing.cur.t5_uac += uac_ticks;
         t5_nested_ticks += fm1_ticks() - t0;
         return;
     }
@@ -257,6 +270,9 @@ static void fm1_main(void)
                 song.batt_raw = song.batt_raw ? song.batt_raw + (b - song.batt_raw) / 32 : b;
         }
         master_poll();
+#if FELUCCA_RDX
+        rdx_fx_maintenance();                           /* large FX stores: never clear inside audio IRQ */
+#endif
         {   /* OCT- + OCT+ held 5 s: enter UBOOT with RAM intact (debug / update); a countdown
              * shows from 2 s over the whole screen (the menu and the dialogs too: ui_draw), letting
              * go cancels it */

@@ -1816,6 +1816,54 @@ static void style_apply(void)
     }
 }
 
+#if FELUCCA_RDX
+/* Diagnostic build: a missed DMA deadline must be visible while playing, not
+ * only after navigating to INFO.  The record is copied once and remains on
+ * screen for 1.5 s, so a later ISR cannot alter the displayed cause/timing. */
+static void draw_audio_late_notice(void)
+{
+    static uint32_t seen, until;
+    static uint8_t shown;
+    static audio_late_record_t rec;
+    uint32_t n = audio_late_notice, available;
+    char top[32], count[20] = "COUNT ", detail[32] = "W ";
+    const char *src;
+    uint32_t p;
+    uint16_t bg;
+    if (n != seen) {
+        seen = n;
+        if (audio_late_snapshot(0, &rec, &available)) {
+            until = fm1_ms + 1500u;
+            shown = 1;
+        }
+    }
+    if (!shown)
+        return;
+    if ((int32_t)(until - fm1_ms) <= 0) {
+        shown = 0;
+        ui.force = 1;
+        return;
+    }
+    src = rec.source == (AUDIO_LATE_C0 | AUDIO_LATE_C1) ? "BOTH" :
+          rec.source == AUDIO_LATE_C0 ? "CORE0" : rec.source == AUDIO_LATE_C1 ? "CORE1" : "SYNC";
+    str_cpy(top, src, sizeof top);
+    p = str_len(top); str_cpy(top + p, "  BURST ", sizeof top - p);
+    fmt_int(top + str_len(top), rec.burst);
+    fmt_int(count + 6, (int32_t)rec.count);
+    fmt_int(detail + 2, (int32_t)rec.timing.wall);
+    p = str_len(detail); str_cpy(detail + p, "  C0 ", sizeof detail - p);
+    fmt_int(detail + str_len(detail), (int32_t)rec.timing.c0);
+    bg = ((fm1_ms / 120u) & 1u) ? T_REC : T_ACCENT;
+    cv_begin(224, 100, T_BG);
+    cv_rrect(0, 0, 224, 100, -8, bg, T_BG);
+    cv_text_in(0, 4, 224, &AF_S, top, T_INK, bg);
+    cv_text_in(0, 23, 224, &AF_L, "AUDIO LATE", T_INK, bg);
+    cv_text_in(0, 65, 224, &AF_S, count, T_INK, bg);
+    cv_text_in(0, 81, 224, &AF_S, detail, T_INK, bg);
+    cv_blit(8, 70);
+}
+#endif
+
 static void ui_draw_page(uint32_t counting);
 static void ui_draw(void)
 {
@@ -1829,6 +1877,9 @@ static void ui_draw(void)
     if (!scr_frame())                                   /* MENU > SCREEN OFF: dark (or waking), nothing drawn */
         return;
     ui_draw_page(counting);
+#if FELUCCA_RDX
+    draw_audio_late_notice();                           /* last: visible over HOME, menus and dialogs */
+#endif
     scr_shown();
 }
 static void ui_draw_page(uint32_t counting)

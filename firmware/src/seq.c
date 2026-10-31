@@ -665,6 +665,26 @@ static void input_off(track_t *t, uint32_t note)
     trk_note_off(t, note);                          /* other mode (ARP switched while held) */
 }
 
+/* The caller has already removed MIDI/local notes that are still physically
+ * held.  Keep recording and arpeggiator bookkeeping per note, then let the
+ * voice layer release the whole set with one POLY voice-table walk. */
+static void input_off_batch(track_t *t, const uint32_t notes[4])
+{
+    uint32_t note;
+    for (note = 0; note < 128u; note++) {
+        uint32_t k;
+        if (!(notes[note >> 5] & (1u << (note & 31u))))
+            continue;
+        if (cin_left)
+            for (k = 0; k < cin_n[trk_index(t)]; k++)
+                if (cin_note[trk_index(t)][k] == note)
+                    cin_up[trk_index(t)] |= (uint8_t)(1u << k);
+        rec_release(t, note);
+        arp_remove(t, note);
+    }
+    trk_notes_off(t, notes);
+}
+
 /* the effect of key k in the FX layer (PF_N none): the white keys F3 .. G5 the map's (perf_map: the settings,
  * ui_layer.c; by default 1.1.5's ten, FLANGER, PHASER, REV / ECHO THROW), black keys 1..4 the track mutes */
 static uint32_t perf_key(uint32_t k)
@@ -1389,6 +1409,11 @@ static void events_block(uint32_t n)
         t->aholdp = t->p[P_AHOLD];
     }
     keyboard_block();
+#if AUDIO_TIMING_ON
+    {
+        uint32_t midi_n = 0, midi_t5 = t5_nested_ticks;
+        AUDIO_TIME_START(t_midi);
+#endif
     while (mi_r != mi_w) {                            /* USB-MIDI (and TRS) in */
         uint32_t at = mi_r % MQ, pkt = midi_in_q[at], status = (pkt >> 8) & 0xFFu;
         uint32_t st = status & 0xF0u, ch = status & 0x0Fu;
@@ -1404,7 +1429,19 @@ static void events_block(uint32_t n)
             }
         } else
             midi_event(st, ch, d1, d2);
+#if AUDIO_TIMING_ON
+        midi_n++;
+#endif
     }
+#if AUDIO_TIMING_ON
+        uint32_t midi_ticks = fm1_ticks() - t_midi, nested = t5_nested_ticks - midi_t5;
+        /* MIDI is a subset of PRE, but TIMER5 is reported separately.  Remove
+         * nested panel/UAC work so one MIDI message cannot appear to cost the
+         * whole higher-priority scan interval. */
+        audio_timing.cur.midi += midi_ticks > nested ? midi_ticks - nested : 0u;
+        audio_timing.cur.midi_events += midi_n;
+    }
+#endif
     if (clock_mode) {
         seq_n = 0;
         if (song.playing) {

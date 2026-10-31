@@ -907,6 +907,43 @@ EXPORT uint32_t web_test_rdx_patch_byte(uint32_t i)
     rdx_patch_for_track(0, &p);
     return i < sizeof p ? ((const uint8_t *)&p)[i] : 0xFFFFFFFFu;
 }
+EXPORT uint32_t web_test_rdx_note_table_exact(void)
+{
+    uint32_t sel = rdx_track_sel[0] & 1u, note, k;
+    const rdx_patch_t *p = &rdx_track_patch[0][sel];
+    const rdx_note_table_t *table = &rdx_track_note_table[0][sel];
+    for (note = 0; note < 128u; note++) {
+        uint32_t base_inc = pitch_inc(clamp((int32_t)note * 16 +
+                                            ((int32_t)p->common.transpose - 64) * 16,
+                                            0, 2047));
+        for (k = 0; k < 4u; k++) {
+            const rdx_op_param_t *o = &p->op[k];
+            if (table->level_scale[note][k] != rdx_level_scaling(o, note) ||
+                table->rate_offset[note][k] != rdx_rate_offset(note, o->rate_scaling) ||
+                table->base_inc[note][k] != rdx_op_inc(o, base_inc, 0, 0))
+                return note * 4u + k + 1u;
+        }
+    }
+    return 0u;
+}
+EXPORT uint32_t web_test_rdx_deferred_fx_clear(void)
+{
+    uint32_t wanted = RFX_CLEAR_NATIVE(0u) | RFX_CLEAR_HALL(1u) | RFX_CLEAR_CHORUS(0u);
+    rev_comb[0] = 11;
+    rdx_cloud_mem[1][0] = 22;
+    rfx_chorus2[0].buf[0] = 33;
+    rfx_reverb_clear_later(0u, 0u);
+    rfx_reverb_clear_later(1u, 2u);
+    rfx_clear_pending |= (uint8_t)RFX_CLEAR_CHORUS(0u);
+    if ((rfx_clear_pending & wanted) != wanted || !rev_comb[0] ||
+        !rdx_cloud_mem[1][0] || !rfx_chorus2[0].buf[0])
+        return 1u;                                    /* request itself must not clear in audio context */
+    rdx_fx_maintenance();
+    rdx_fx_maintenance();
+    rdx_fx_maintenance();
+    return (rfx_clear_pending & wanted) || rev_comb[0] ||
+           rdx_cloud_mem[1][0] || rfx_chorus2[0].buf[0];
+}
 static rdx_note_t *web_test_rdx_note(void)
 {
     uint32_t i;

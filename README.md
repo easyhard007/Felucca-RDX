@@ -12,8 +12,8 @@ instrument and its sound sets.
 
 ![Felucca-RDX Algorithm 9 editor](cover.png)
 
-The current firmware version is **Felucca RDX 1.0.7**. Its version-encoded FM-1
-firmware identity is **`FM-1_96510007`** (`965 + M + mm + pp`). RDX is monotimbral: the
+The current firmware version is **Felucca RDX 1.1.0**. Its version-encoded FM-1
+firmware identity is **`FM-1_96510100`** (`965 + M + mm + pp`). RDX is monotimbral: the
 runtime contains one track and one eight-voice RDX part. The old four-track
 Felucca mixer, extra MIDI-track channels and automatic track selection are not
 part of the RDX build.
@@ -28,8 +28,7 @@ Current features include:
 - an `FX1 -> FX2` serial stereo effects chain;
 - the Felucca full-rate Delay, a fixed-point stereo JIANT Chorus, and a
   Q14 stereo port of the Mutable Instruments Clouds reverb exposed as Hall;
-- fixed-point PicoFaceDX Phaser-RDX and Flanger-RDX algorithms, with the
-  original Felucca models retained for A/B comparison;
+- fixed-point PicoFaceDX Phaser-RDX and the tuned THK-W Flanger-RDX algorithm;
 - five MIDI velocity curves with Q8.8 velocity inside the RDX engine;
 - HOME controls for Reface `MODE` (`Poly`, `MonoFull`, `MonoLeg.`), `PORTA`
   (0–127), calibrated per-sound `GAIN` (−24…+24 dB), and `Trans.` (±24
